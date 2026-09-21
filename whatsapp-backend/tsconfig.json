@@ -13,8 +13,7 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "allowSyntheticDefaultImports": true,
-    "moduleResolution": "node"
+    "allowSyntheticDefaultImports": true
   },
   "ts-node": {
     "transpileOnly": true,
