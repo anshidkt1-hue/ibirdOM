@@ -86,14 +86,60 @@ export async function sendTextMessage(phoneNumber: string, text: string) {
   }
 }
 
+export async function sendButtons(
+  phoneNumber: string,
+  bodyText: string,
+  buttons: { id: string; title: string }[]
+) {
+  try {
+    const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`;
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: phoneNumber,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: bodyText.slice(0, 1024) },
+        action: {
+          buttons: buttons.slice(0, 3).map((b) => ({
+            type: 'reply',
+            reply: { id: b.id, title: b.title.slice(0, 20) },
+          })),
+        },
+      },
+    };
+
+    const response = await axios.post(url, payload, {
+      headers: {
+        'Authorization': `Bearer ${ACCESS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    console.log(`✅ Buttons sent to ${phoneNumber}`);
+    return response.data;
+  } catch (error: any) {
+    console.error(`❌ Failed to send buttons:`, error.response?.data);
+    throw error;
+  }
+}
+
 export async function sendProductList(phoneNumber: string) {
   try {
     // Fetch products from ibird
-    const { data: products } = await supabase
+    const { data: products, error: productsError } = await supabase
       .from('products')
-      .select('id, name, price, stock, description')
+      .select('id, name, price, stock')
+      .eq('active', true)
       .gt('stock', 0)
+      .order('name')
       .limit(10);
+
+    if (productsError) {
+      console.error('❌ Product query failed:', productsError.message);
+    }
 
     if (!products || products.length === 0) {
       await sendTextMessage(phoneNumber, '❌ No products available at the moment. Please try again later.');
@@ -122,8 +168,8 @@ export async function sendProductList(phoneNumber: string) {
               title: 'Available Products',
               rows: products.map((p: any) => ({
                 id: p.id,
-                title: p.name,
-                description: `₹${p.price} | Stock: ${p.stock}`,
+                title: String(p.name).slice(0, 24),
+                description: `₹${p.price} | In stock: ${p.stock}`.slice(0, 72),
               })),
             },
           ],

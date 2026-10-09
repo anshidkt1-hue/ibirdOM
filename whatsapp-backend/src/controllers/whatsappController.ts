@@ -1,7 +1,10 @@
 import { Request, Response } from 'express';
 import { supabase } from '../server';
-import { processCustomerMessage } from '../services/messageProcessor';
-import { sendProductList } from '../services/whatsappService';
+import {
+  processCustomerMessage,
+  processButtonReply,
+  processListSelection,
+} from '../services/messageProcessor';
 
 export async function verifyWebhookToken(req: Request, res: Response) {
   const mode = req.query['hub.mode'];
@@ -20,24 +23,19 @@ export async function verifyWebhookToken(req: Request, res: Response) {
 export async function handleIncomingMessage(req: Request, res: Response) {
   const body = req.body;
 
-  // Respond immediately
   res.status(200).json({ received: true });
 
   try {
     if (body.object === 'whatsapp_business_account') {
-      const entries = body.entry || [];
-
-      for (const entry of entries) {
-        const changes = entry.changes || [];
-
-        for (const change of changes) {
+      for (const entry of body.entry || []) {
+        for (const change of entry.changes || []) {
           if (change.field === 'messages') {
-            const messages = change.value.messages || [];
-            const contacts = change.value.contacts || [];
-
-            // Handle incoming messages
-            for (const message of messages) {
-              await handleMessage(message, contacts[0]);
+            for (const message of change.value.messages || []) {
+              try {
+                await handleMessage(message);
+              } catch (error: any) {
+                console.error('❌ Message handling failed:', error?.response?.data || error?.message || error);
+              }
             }
           }
         }
@@ -48,139 +46,49 @@ export async function handleIncomingMessage(req: Request, res: Response) {
   }
 }
 
-async function handleMessage(message: any, contact: any) {
+async function handleMessage(message: any) {
   const phoneNumber = message.from;
-  const messageId = message.id;
   const timestamp = new Date(parseInt(message.timestamp) * 1000);
 
   console.log(`📨 Message from ${phoneNumber}: ${JSON.stringify(message)}`);
 
-  // Log message
-  await supabase.from('whatsapp_messages').insert({
+  const { error: logError } = await supabase.from('whatsapp_messages').insert({
     phone_number: phoneNumber,
     message_type: 'inbound',
     message_content: JSON.stringify(message),
     created_at: timestamp,
   });
+  if (logError) console.error('❌ Message log failed:', logError.message);
 
-  // Get or create session
-  let sessionData = await supabase
+  const { data: existing } = await supabase
     .from('whatsapp_sessions')
     .select('*')
     .eq('phone_number', phoneNumber)
-    .single();
+    .maybeSingle();
 
-  if (sessionData.error) {
-    // Create new session
-    const { data: newSession } = await supabase
+  let session = existing;
+  if (!session) {
+    const { data: created, error } = await supabase
       .from('whatsapp_sessions')
-      .insert({
-        phone_number: phoneNumber,
-        session_state: 'welcome',
-      })
+      .insert({ phone_number: phoneNumber, session_state: 'welcome' })
       .select()
       .single();
-
-    sessionData.data = newSession;
+    if (error) console.error('❌ Session create failed (are the WhatsApp tables migrated?):', error.message);
+    session = created;
   }
 
-  // Process message based on type
   if (message.type === 'text') {
-    await processCustomerMessage(phoneNumber, message.text.body, sessionData.data);
-  } else if (message.type === 'button') {
-    await handleButtonReply(phoneNumber, message.button.payload, sessionData.data);
+    await processCustomerMessage(phoneNumber, message.text.body, session);
   } else if (message.type === 'interactive') {
-    await handleInteractiveReply(phoneNumber, message.interactive, sessionData.data);
+    const interactive = message.interactive;
+    if (interactive.type === 'button_reply') {
+      await processButtonReply(phoneNumber, interactive.button_reply.id);
+    } else if (interactive.type === 'list_reply') {
+      await processListSelection(phoneNumber, interactive.list_reply.id);
+    }
+  } else if (message.type === 'button') {
+    await processButtonReply(phoneNumber, message.button.payload);
   }
-}
-
-async function handleButtonReply(phoneNumber: string, payload: string, session: any) {
-  console.log(`🔘 Button clicked - ${phoneNumber}: ${payload}`);
-
-  if (payload === 'start_order') {
-    await supabase
-      .from('whatsapp_sessions')
-      .update({
-        session_state: 'catalog',
-        updated_at: new Date(),
-      })
-      .eq('phone_number', phoneNumber);
-
-    await sendProductList(phoneNumber);
-  }
-}
-
-async function handleInteractiveReply(phoneNumber: string, interactive: any, session: any) {
-  console.log(`⚡ Interactive reply - ${phoneNumber}:`, interactive);
-
-  const type = interactive.type;
-
-  if (type === 'form_response') {
-    await processFormSubmission(phoneNumber, interactive.form_response, session);
-  } else if (type === 'list_reply') {
-    await processListSelection(phoneNumber, interactive.list_reply, session);
-  }
-}
-
-async function processFormSubmission(phoneNumber: string, formData: any, session: any) {
-  console.log(`📝 Form submitted from ${phoneNumber}:`, formData);
-
-  // Update session with form data
-  await supabase
-    .from('whatsapp_sessions')
-    .update({
-      form_data: formData,
-      session_state: 'catalog',
-      updated_at: new Date(),
-    })
-    .eq('phone_number', phoneNumber);
-
-  // Send product catalog
-  await sendProductList(phoneNumber);
-}
-
-async function processListSelection(phoneNumber: string, listData: any, session: any) {
-  console.log(`🛒 Product selected - ${phoneNumber}: ${listData.id}`);
-
-  // Get product details
-  const { data: product } = await supabase
-    .from('products')
-    .select('*')
-    .eq('id', listData.id)
-    .single();
-
-  if (!product) {
-    console.error('Product not found');
-    return;
-  }
-
-  // Add to cart
-  const currentCart = session?.cart_items || [];
-  const existingItem = currentCart.find((item: any) => item.product_id === product.id);
-
-  if (existingItem) {
-    existingItem.quantity += 1;
-  } else {
-    currentCart.push({
-      product_id: product.id,
-      name: product.name,
-      price: product.price,
-      quantity: 1,
-    });
-  }
-
-  await supabase
-    .from('whatsapp_sessions')
-    .update({
-      cart_items: currentCart,
-      updated_at: new Date(),
-    })
-    .eq('phone_number', phoneNumber);
-
-  console.log(`✅ Added to cart: ${product.name}`);
-
-  // Ask if they want more items
-  // TODO: Send "add more items" message
 }
 
 export async function handleMessageStatus(req: Request, res: Response) {
@@ -191,10 +99,7 @@ export async function handleMessageStatus(req: Request, res: Response) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    await supabase
-      .from('whatsapp_messages')
-      .update({ status })
-      .eq('id', messageId);
+    await supabase.from('whatsapp_messages').update({ status }).eq('id', messageId);
 
     res.json({ success: true });
   } catch (error: any) {
