@@ -14,6 +14,7 @@ const MAP: Record<string, string> = {
   cancelled: "bg-destructive/10 text-destructive border-destructive/25",
   refunded: "bg-destructive/10 text-destructive border-destructive/25",
   whatsapp: "bg-success/12 text-success border-success/25",
+  counter: "bg-primary/10 text-primary border-primary/25",
   "walk-in": "bg-secondary text-secondary-foreground border-border",
   manual: "bg-accent text-accent-foreground border-transparent",
 };

@@ -36,7 +36,7 @@ import { logout } from "@/lib/auth";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutGrid },
-  { to: "/pos", label: "Point of Sale", icon: ShoppingCart },
+  { to: "/pos", label: "Counter Sale", icon: ShoppingCart },
   { to: "/orders", label: "Orders", icon: Receipt },
   { to: "/customers", label: "Customers", icon: Users },
   { to: "/inventory", label: "Inventory", icon: Boxes },

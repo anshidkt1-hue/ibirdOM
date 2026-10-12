@@ -24,8 +24,13 @@ import { AppShell } from "@/components/app-shell";
 import { StatCard } from "@/components/stat-card";
 
 import { Button } from "@/components/ui/button";
-import { ExportMenu } from "@/components/export-menu";
-import { fetchOrders, fetchProducts } from "@/lib/data";
+import { ScopedExportMenu, type ExportScope } from "@/components/export-menu";
+import {
+  fetchDashboardStats,
+  fetchOrdersMatching,
+  fetchProducts,
+  fetchRecentOrders,
+} from "@/lib/data";
 import { formatCurrency, formatDate, formatNumber } from "@/lib/format";
 import { useRole } from "@/components/role-provider";
 
@@ -51,32 +56,52 @@ export const Route = createFileRoute("/")({
 function Dashboard() {
   const { role } = useRole();
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const ordersQuery = useQuery({ queryKey: ["orders"], queryFn: fetchOrders });
+  const statsQuery = useQuery({
+    queryKey: ["orders", "dashboard-stats"],
+    queryFn: () => fetchDashboardStats(7),
+    refetchInterval: 60000,
+  });
+  const recentQuery = useQuery({
+    queryKey: ["orders", "recent"],
+    queryFn: () => fetchRecentOrders(6),
+    refetchInterval: 60000,
+  });
   const productsQuery = useQuery({ queryKey: ["products"], queryFn: fetchProducts });
 
-  const orders = ordersQuery.data ?? [];
+  const stats = statsQuery.data;
   const products = productsQuery.data ?? [];
 
-  const completed = orders.filter((o) => o.status === "completed");
-  const revenue = completed.reduce((s, o) => s + Number(o.total), 0);
-  const avgOrder = completed.length ? revenue / completed.length : 0;
+  const totalOrders = Number(stats?.total_count ?? 0);
+  const completedCount = Number(stats?.completed_count ?? 0);
+  const revenue = Number(stats?.revenue ?? 0);
+  const avgOrder = completedCount ? revenue / completedCount : 0;
   const lowStock = products.filter((p) => p.stock <= p.low_stock_threshold);
 
-  const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    return d;
-  });
-  const chartData = days.map((d) => {
-    const key = d.toDateString();
-    const total = completed
-      .filter((o) => new Date(o.created_at).toDateString() === key)
-      .reduce((s, o) => s + Number(o.total), 0);
-    return { day: d.toLocaleDateString("en-IN", { day: "numeric", month: "short" }), total };
-  });
+  const chartData = (stats?.daily ?? []).map((d) => ({
+    day: new Date(`${d.day}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
+    total: Number(d.total),
+  }));
 
-  const recent = orders.slice(0, 6);
+  const recent = recentQuery.data ?? [];
   const canViewReports = role !== "staff";
+
+  const reportScopes: ExportScope[] = [
+    {
+      key: "all-orders",
+      label: `All orders (${totalOrders.toLocaleString("en-IN")})`,
+      getRows: async (onProgress) => {
+        const all = await fetchOrdersMatching({}, onProgress);
+        return all.map((o) => ({
+          Order: o.order_number,
+          Customer: o.customer_name,
+          Source: o.source,
+          Status: o.status,
+          Total: Number(o.total),
+          Date: formatDate(o.created_at),
+        }));
+      },
+    },
+  ];
 
   return (
     <AppShell
@@ -85,18 +110,11 @@ function Dashboard() {
       actions={
         <>
           {canViewReports && (
-            <ExportMenu
+            <ScopedExportMenu
               title="Dashboard report"
               filename="ibird-dashboard"
               label="Download Report"
-              rows={orders.map((o) => ({
-                Order: o.order_number,
-                Customer: o.customer_name,
-                Source: o.source,
-                Status: o.status,
-                Total: Number(o.total),
-                Date: formatDate(o.created_at),
-              }))}
+              scopes={reportScopes}
             />
           )}
           <Button
@@ -105,7 +123,8 @@ function Dashboard() {
               setIsRefreshing(true);
               try {
                 await Promise.all([
-                  ordersQuery.refetch(),
+                  statsQuery.refetch(),
+                  recentQuery.refetch(),
                   productsQuery.refetch(),
                 ]);
                 toast.success("Data refreshed successfully", {
@@ -119,7 +138,7 @@ function Dashboard() {
                 setIsRefreshing(false);
               }
             }}
-            disabled={isRefreshing || ordersQuery.isLoading || productsQuery.isLoading}
+            disabled={isRefreshing || statsQuery.isLoading || productsQuery.isLoading}
           >
             <RefreshCw className={`size-4 ${isRefreshing ? "animate-spin" : ""}`} />
             {isRefreshing ? "Refreshing..." : "Refresh Data"}
@@ -130,7 +149,7 @@ function Dashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Button asChild size="lg" className="h-14 gap-2 text-base">
           <Link to="/pos">
-            <FilePlus2 className="size-5" /> New Order
+            <FilePlus2 className="size-5" /> New Counter Sale
           </Link>
         </Button>
         <Button
@@ -168,14 +187,14 @@ function Dashboard() {
             <StatCard
               label="Total Revenue"
               value={formatCurrency(revenue)}
-              hint={`${completed.length} completed orders`}
+              hint={`${formatNumber(completedCount)} completed orders`}
               icon={IndianRupee}
               tone="success"
             />
             <StatCard
               label="Transactions"
-              value={formatNumber(orders.length)}
-              hint={`${orders.length} total`}
+              value={formatNumber(totalOrders)}
+              hint={`${formatNumber(totalOrders)} total`}
               icon={Receipt}
             />
             <StatCard
@@ -190,8 +209,8 @@ function Dashboard() {
         {!canViewReports && (
           <StatCard
             label="Transactions"
-            value={formatNumber(orders.length)}
-            hint={`${orders.length} total`}
+            value={formatNumber(totalOrders)}
+            hint={`${formatNumber(totalOrders)} total`}
             icon={Receipt}
           />
         )}

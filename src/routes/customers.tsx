@@ -157,6 +157,7 @@ function CustomersPage() {
               Phone: c.phone ?? "",
               Email: c.email ?? "",
               City: c.city ?? "",
+              Address: c.address ?? "",
               State: c.state ?? "",
               Type: c.customer_type,
               Orders: stat?.count ?? 0,

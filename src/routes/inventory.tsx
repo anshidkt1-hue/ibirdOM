@@ -11,6 +11,7 @@ import {
   Edit2,
   Trash2,
   Image as ImageIcon,
+  Copy,
 } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
@@ -54,8 +55,11 @@ import {
   createCategory,
   updateCategory,
   deleteCategory,
+  channelOf,
+  copyProductToChannel,
   type Product,
   type Category,
+  type SalesChannel,
 } from "@/lib/data";
 import { formatCurrency, formatDateTime, formatNumber } from "@/lib/format";
 import { useRole } from "@/components/role-provider";
@@ -91,7 +95,13 @@ type ProductFormData = {
   low_stock_threshold: number;
   hsn_code: string;
   gst: number;
+  sales_channel: SalesChannel;
   image_url?: string;
+};
+
+const CHANNEL_LABEL: Record<SalesChannel, string> = {
+  online: "WhatsApp / online",
+  counter: "Counter sale",
 };
 
 function InventoryPage() {
@@ -109,6 +119,8 @@ function InventoryPage() {
 
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
+  const [tab, setTab] = useState<string>("online");
+  const tabChannel: SalesChannel = tab === "counter" ? "counter" : "online";
   const [target, setTarget] = useState<Product | null>(null);
   const [qty, setQty] = useState(0);
   const [type, setType] = useState("adjustment");
@@ -133,6 +145,7 @@ function InventoryPage() {
     low_stock_threshold: 0,
     hsn_code: "",
     gst: 5,
+    sales_channel: "online",
   });
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
 
@@ -210,6 +223,15 @@ function InventoryPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const copyProduct = useMutation({
+    mutationFn: (p: Product) => copyProductToChannel(p, channelOf(p) === "online" ? "counter" : "online"),
+    onSuccess: (copy) => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success(`Copied to ${CHANNEL_LABEL[channelOf(copy)]} as ${copy.sku} with 0 stock`);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const deleteProductMutation = useMutation({
     mutationFn: (id: string) => deleteProduct(id),
     onSuccess: () => {
@@ -260,6 +282,7 @@ function InventoryPage() {
       low_stock_threshold: 0,
       hsn_code: "",
       gst: 5,
+      sales_channel: tabChannel,
     });
     setSelectedImage(null);
     setEditingProduct(null);
@@ -277,12 +300,142 @@ function InventoryPage() {
       price: Number(product.price),
       stock: product.stock,
       low_stock_threshold: product.low_stock_threshold,
-      hsn_code: (product as any).hsn_code || "",
-      gst: (product as any).gst || 5,
-      image_url: (product as any).image_url,
+      hsn_code: product.hsn_code || "",
+      gst: Number(product.gst ?? 5),
+      sales_channel: channelOf(product),
+      ...(product.image_url ? { image_url: product.image_url } : {}),
     });
     setShowProductDialog(true);
   };
+
+  const renderProducts = (channel: SalesChannel) => (
+        <>
+          <p className="mb-3 text-sm text-muted-foreground">
+            {channel === "online"
+              ? "Shown to customers in the WhatsApp catalogue. Changes here update WhatsApp immediately."
+              : "Sold at the counter. Stock here is separate from WhatsApp / online stock."}
+          </p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="relative sm:col-span-2">
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                placeholder="Search product or SKU"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <Select value={category} onValueChange={setCategory}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All categories</SelectItem>
+                {categories.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="mt-4 overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Image</TableHead>
+                  <TableHead>Product</TableHead>
+                  <TableHead>SKU / Barcode</TableHead>
+                  <TableHead>HSN / GST</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead className="text-right">Stock</TableHead>
+                  <TableHead className="text-right">Price</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.filter((p) => channelOf(p) === channel).map((p) => (
+                  <TableRow key={p.id}>
+                    <TableCell>
+                      {p.image_url ? (
+                        <img
+                          src={p.image_url}
+                          alt={p.name}
+                          className="h-12 w-12 rounded object-cover"
+                        />
+                      ) : (
+                        <div className="h-12 w-12 rounded bg-muted flex items-center justify-center">
+                          <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-semibold">
+                      {p.name}
+                      {p.variant && (
+                        <span className="ml-1 text-xs text-muted-foreground">({p.variant})</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {p.sku}
+                      <br />
+                      <span className="text-xs">{p.barcode}</span>
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {p.hsn_code && <div className="text-muted-foreground">HSN: {p.hsn_code}</div>}
+                      <div className="text-muted-foreground">GST: {Number(p.gst ?? 0)}%</div>
+                    </TableCell>
+                    <TableCell>{p.category}</TableCell>
+                    <TableCell
+                      className={`text-right font-semibold ${
+                        p.stock <= p.low_stock_threshold ? "text-destructive" : ""
+                      }`}
+                    >
+                      {p.stock}
+                    </TableCell>
+                    <TableCell className="text-right">{formatCurrency(p.price)}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        {can("edit") && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openEditProduct(p)}
+                              title="Edit product"
+                            >
+                              <Edit2 className="size-3" />
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => setTarget(p)} title="Adjust stock">
+                              Adjust
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={copyProduct.isPending}
+                              onClick={() => copyProduct.mutate(p)}
+                              title={channel === "online" ? "Copy to counter sale products" : "Copy to WhatsApp / online products"}
+                            >
+                              <Copy className="size-3" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => deleteProductMutation.mutate(p.id)}
+                              title="Delete product"
+                            >
+                              <Trash2 className="size-3" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+  );
 
   return (
     <AppShell
@@ -303,14 +456,15 @@ function InventoryPage() {
               Product: p.name,
               SKU: p.sku,
               Barcode: p.barcode ?? "",
-              HSN: (p as any).hsn_code ?? "",
+              Channel: CHANNEL_LABEL[channelOf(p)],
+              HSN: p.hsn_code ?? "",
               Category: p.category,
               Variant: p.variant ?? "",
               Stock: p.stock,
               Threshold: p.low_stock_threshold,
               Cost: Number(p.cost_price),
               Price: Number(p.price),
-              GST: (p as any).gst ?? 5,
+              GST: Number(p.gst ?? 0),
             }))}
           />
         </div>
@@ -346,10 +500,11 @@ function InventoryPage() {
         />
       </div>
 
-      <Tabs defaultValue="stock" className="mt-5">
-        <TabsList>
+      <Tabs value={tab} onValueChange={setTab} className="mt-5">
+        <TabsList className="flex h-auto flex-wrap">
+          <TabsTrigger value="online">WhatsApp / online products</TabsTrigger>
+          <TabsTrigger value="counter">Counter sale products</TabsTrigger>
           <TabsTrigger value="categories">Categories</TabsTrigger>
-          <TabsTrigger value="stock">Stock levels</TabsTrigger>
           <TabsTrigger value="alerts">Low stock alerts</TabsTrigger>
           <TabsTrigger value="history">Movement history</TabsTrigger>
         </TabsList>
@@ -419,117 +574,12 @@ function InventoryPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="stock" className="card-surface mt-4 p-4">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="relative sm:col-span-2">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="pl-9"
-                placeholder="Search product or SKU"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-            <Select value={category} onValueChange={setCategory}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All categories</SelectItem>
-                {categories.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="mt-4 overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Image</TableHead>
-                  <TableHead>Product</TableHead>
-                  <TableHead>SKU / Barcode</TableHead>
-                  <TableHead>HSN / GST</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead className="text-right">Stock</TableHead>
-                  <TableHead className="text-right">Price</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((p) => (
-                  <TableRow key={p.id}>
-                    <TableCell>
-                      {p.image_url ? (
-                        <img
-                          src={p.image_url}
-                          alt={p.name}
-                          className="h-12 w-12 rounded object-cover"
-                        />
-                      ) : (
-                        <div className="h-12 w-12 rounded bg-muted flex items-center justify-center">
-                          <ImageIcon className="h-6 w-6 text-muted-foreground" />
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-semibold">
-                      {p.name}
-                      {p.variant && (
-                        <span className="ml-1 text-xs text-muted-foreground">({p.variant})</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {p.sku}
-                      <br />
-                      <span className="text-xs">{p.barcode}</span>
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {(p as any).hsn_code && <div className="text-muted-foreground">HSN: {(p as any).hsn_code}</div>}
-                      {(p as any).gst && <div className="text-muted-foreground">GST: {(p as any).gst}%</div>}
-                    </TableCell>
-                    <TableCell>{p.category}</TableCell>
-                    <TableCell
-                      className={`text-right font-semibold ${
-                        p.stock <= p.low_stock_threshold ? "text-destructive" : ""
-                      }`}
-                    >
-                      {p.stock}
-                    </TableCell>
-                    <TableCell className="text-right">{formatCurrency(p.price)}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        {can("edit") && (
-                          <>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => openEditProduct(p)}
-                              title="Edit product"
-                            >
-                              <Edit2 className="size-3" />
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={() => setTarget(p)} title="Adjust stock">
-                              Adjust
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => deleteProductMutation.mutate(p.id)}
-                              title="Delete product"
-                            >
-                              <Trash2 className="size-3" />
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+        <TabsContent value="online" className="card-surface mt-4 p-4">
+          {renderProducts("online")}
+        </TabsContent>
+
+        <TabsContent value="counter" className="card-surface mt-4 p-4">
+          {renderProducts("counter")}
         </TabsContent>
 
         <TabsContent value="alerts" className="card-surface mt-4 p-4">
@@ -538,7 +588,7 @@ function InventoryPage() {
               <div key={p.id} className="rounded-lg border border-warning/40 bg-warning/5 p-3">
                 <p className="truncate font-semibold">{p.name}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {p.stock} left · reorder below {p.low_stock_threshold}
+                  {CHANNEL_LABEL[channelOf(p)]} · {p.stock} left · reorder below {p.low_stock_threshold}
                 </p>
                 {can("edit") && (
                   <Button size="sm" variant="outline" className="mt-2" onClick={() => setTarget(p)}>
@@ -672,6 +722,22 @@ function InventoryPage() {
                   placeholder="e.g. CW-FP-001"
                 />
               </div>
+            </div>
+
+            <div>
+              <Label>Sold through *</Label>
+              <Select
+                value={formData.sales_channel}
+                onValueChange={(v) => setFormData({ ...formData, sales_channel: v as SalesChannel })}
+              >
+                <SelectTrigger className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="online">WhatsApp / online (shown in the WhatsApp catalogue)</SelectItem>
+                  <SelectItem value="counter">Counter sale (shown in Counter Sale)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="grid grid-cols-2 gap-3">

@@ -16,6 +16,7 @@ import {
 import { fetchSettings, saveSettings } from "@/lib/data";
 import { useRole } from "@/components/role-provider";
 import { StatusBadge } from "@/components/status-badge";
+import { WhatsAppLinkBuilder } from "@/components/whatsapp-link-builder";
 
 // Role permissions definition - outside component for better performance
 const ROLE_PERMISSIONS: Record<string, { desc: string; access: string[]; restrictions: string[] }> = {
@@ -102,13 +103,18 @@ function SettingsPage() {
     >
       <div className="card-surface" style={{ opacity: isLoading ? 0.6 : 1, transition: "opacity 0.3s" }}>
         <Tabs defaultValue="company" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="flex h-auto w-full flex-wrap">
             <TabsTrigger value="company">Company</TabsTrigger>
             <TabsTrigger value="tax">Tax & Pricing</TabsTrigger>
             <TabsTrigger value="localization">Localization</TabsTrigger>
             <TabsTrigger value="advanced">Advanced</TabsTrigger>
             <TabsTrigger value="access">Access Control</TabsTrigger>
+            <TabsTrigger value="whatsapp">WhatsApp link</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="whatsapp" className="p-6">
+            <WhatsAppLinkBuilder />
+          </TabsContent>
 
           {/* Company Settings */}
           <TabsContent value="company" className="space-y-6 p-6">

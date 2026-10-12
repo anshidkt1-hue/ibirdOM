@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { fetchOrder, updateOrderStatus, fetchOrderStatusHistory, fetchOrderAssignmentHistory, fetchEmployees, recordStatusChange, recordAssignmentChange, type OrderStatusHistory, type OrderAssignmentHistory, type Employee } from "@/lib/data";
+import { fetchOrder, fetchOrderCoupon, updateOrderStatus, fetchOrderStatusHistory, fetchOrderAssignmentHistory, fetchEmployees, recordStatusChange, recordAssignmentChange, type OrderStatusHistory, type OrderAssignmentHistory, type Employee } from "@/lib/data";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { useRole } from "@/components/role-provider";
 
@@ -57,6 +57,10 @@ function OrderDetail() {
   const { data: employees = [] } = useQuery({
     queryKey: ["employees"],
     queryFn: fetchEmployees,
+  });
+  const { data: giveawayCoupon } = useQuery({
+    queryKey: ["order-coupon", orderId],
+    queryFn: () => fetchOrderCoupon(orderId),
   });
 
   const mutate = useMutation({
@@ -245,6 +249,13 @@ function OrderDetail() {
               <div className="mt-3">
                 <p className="text-xs font-semibold uppercase text-muted-foreground">Delivery address</p>
                 <p className="mt-1 text-sm">{order.delivery_address}</p>
+              </div>
+            )}
+
+            {giveawayCoupon && (
+              <div className="mt-3">
+                <p className="text-xs font-semibold uppercase text-muted-foreground">Thar ROXX giveaway coupon</p>
+                <p className="mt-1 font-mono text-sm font-semibold">{giveawayCoupon}</p>
               </div>
             )}
 

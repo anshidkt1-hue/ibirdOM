@@ -52,30 +52,35 @@ async function handleMessage(message: any) {
 
   console.log(`📨 Message from ${phoneNumber}: ${JSON.stringify(message)}`);
 
+  // Meta re-delivers events; the unique wa_message_id makes handling exactly-once.
   const { error: logError } = await supabase.from('whatsapp_messages').insert({
     phone_number: phoneNumber,
     message_type: 'inbound',
     message_content: JSON.stringify(message),
+    wa_message_id: message.id,
     created_at: timestamp,
   });
-  if (logError) console.error('❌ Message log failed:', logError.message);
+  if (logError) {
+    if (logError.code === '23505') {
+      console.log(`↩️ Duplicate delivery ignored: ${message.id}`);
+      return;
+    }
+    console.error('❌ Message log failed:', logError.message);
+  }
 
-  const { data: existing } = await supabase
+  await supabase
+    .from('whatsapp_sessions')
+    .upsert(
+      { phone_number: phoneNumber, session_state: 'welcome' },
+      { onConflict: 'phone_number', ignoreDuplicates: true }
+    );
+
+  const { data: session, error: sessionError } = await supabase
     .from('whatsapp_sessions')
     .select('*')
     .eq('phone_number', phoneNumber)
     .maybeSingle();
-
-  let session = existing;
-  if (!session) {
-    const { data: created, error } = await supabase
-      .from('whatsapp_sessions')
-      .insert({ phone_number: phoneNumber, session_state: 'welcome' })
-      .select()
-      .single();
-    if (error) console.error('❌ Session create failed (are the WhatsApp tables migrated?):', error.message);
-    session = created;
-  }
+  if (sessionError) console.error('❌ Session load failed:', sessionError.message);
 
   if (message.type === 'text') {
     await processCustomerMessage(phoneNumber, message.text.body, session);

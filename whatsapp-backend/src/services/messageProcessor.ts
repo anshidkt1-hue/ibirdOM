@@ -1,5 +1,5 @@
 import { supabase } from '../server';
-import { sendButtons, sendProductList, sendTextMessage } from './whatsappService';
+import { sendButtons, sendProductList, sendTextMessage, STORE_NAME } from './whatsappService';
 import { createWhatsAppOrder, CartItem } from './orderService';
 
 const RESET_WORDS = ['hi', 'hello', 'hey', 'menu', 'start', 'restart', 'cancel', 'order'];
@@ -31,7 +31,7 @@ export async function sendWelcome(phoneNumber: string) {
   await updateSession(phoneNumber, { session_state: 'welcome', cart_items: [], form_data: {} });
   await sendButtons(
     phoneNumber,
-    '👋 Welcome to *ibird*!\n\nBrowse our products and place your order right here on WhatsApp.',
+    `👋 Welcome to *${STORE_NAME}*!\n\nBrowse our products and place your order right here on WhatsApp.`,
     [{ id: 'start_order', title: '🛒 Start Order' }]
   );
 }
@@ -51,6 +51,18 @@ async function checkout(phoneNumber: string) {
     return;
   }
 
+  // Atomic claim: a double-tap on Checkout must not create two orders.
+  const { data: claimed } = await supabase
+    .from('whatsapp_sessions')
+    .update({ session_state: 'processing', updated_at: new Date() })
+    .eq('phone_number', phoneNumber)
+    .neq('session_state', 'processing')
+    .select('id');
+  if (!claimed || claimed.length === 0) {
+    console.log(`↩️ Checkout already in progress for ${phoneNumber}`);
+    return;
+  }
+
   try {
     const form = session?.form_data || {};
     const order = await createWhatsAppOrder(phoneNumber, cart, {
@@ -62,12 +74,13 @@ async function checkout(phoneNumber: string) {
     await sendTextMessage(
       phoneNumber,
       `✅ Order *${order.orderNumber}* created!\n\n` +
-        `Subtotal: ₹${order.subtotal}\nTax (5%): ₹${order.tax}\n*Total: ₹${order.total}*\n\n` +
+        `Subtotal: ₹${order.subtotal}\nTax (GST): ₹${order.tax}\n*Total: ₹${order.total}*\n\n` +
         `💳 Pay securely here:\n${order.paymentUrl}\n\n` +
         `Your order is confirmed once payment is received. Link valid for 24 hours.`
     );
   } catch (error: any) {
     console.error('❌ Checkout failed:', error.message);
+    await updateSession(phoneNumber, { session_state: 'catalog' });
     await sendTextMessage(phoneNumber, '😕 Sorry, we could not create your order. Please try again in a moment.');
   }
 }
@@ -83,6 +96,8 @@ export async function processCustomerMessage(phoneNumber: string, messageText: s
     return sendWelcome(phoneNumber);
   }
 
+  if (state === 'processing') return;
+
   if (state === 'ask_name') {
     const form = { ...(session.form_data || {}), name: raw.slice(0, 80) };
     await updateSession(phoneNumber, { form_data: form, session_state: 'ask_address' });
@@ -92,13 +107,15 @@ export async function processCustomerMessage(phoneNumber: string, messageText: s
   if (state === 'ask_address') {
     const form = { ...(session.form_data || {}), address: raw.slice(0, 300) };
     await updateSession(phoneNumber, { form_data: form, session_state: 'catalog' });
-    await sendTextMessage(phoneNumber, 'Got it! Here are our products 👇');
     return sendProductList(phoneNumber);
   }
 
   if (state === 'catalog') {
     if (text.includes('checkout') || text.includes('pay')) return checkout(phoneNumber);
-    return sendProductList(phoneNumber);
+    return sendButtons(phoneNumber, 'Tap *Add to cart* under any product above, or choose:', [
+      { id: 'view_products', title: '🛍️ View products' },
+      { id: 'checkout', title: '✅ Checkout' },
+    ]);
   }
 
   if (state === 'payment') {
@@ -123,6 +140,10 @@ export async function processButtonReply(phoneNumber: string, buttonId: string) 
   console.log(`🔘 Button clicked - ${phoneNumber}: ${buttonId}`);
 
   if (buttonId === 'start_order') return startOrder(phoneNumber);
+
+  if (buttonId.startsWith('add:')) return processListSelection(phoneNumber, buttonId.slice(4));
+
+  if (buttonId === 'view_products') return sendProductList(phoneNumber);
 
   if (buttonId === 'add_more') {
     await updateSession(phoneNumber, { session_state: 'catalog' });

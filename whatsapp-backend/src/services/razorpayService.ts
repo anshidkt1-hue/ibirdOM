@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import Razorpay from 'razorpay';
 import { supabase } from '../server';
-import { sendTextMessage } from './whatsappService';
+import { sendTextMessage, STORE_NAME } from './whatsappService';
 
 let razorpay: any = null;
 
@@ -41,7 +41,7 @@ export async function createPaymentLink(
     accept_partial: false,
     expire_by: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
     reference_id: orderData.order_number,
-    description: `ibird Order ${orderData.order_number}`,
+    description: `${STORE_NAME} Order ${orderData.order_number}`,
     customer: {
       name: orderData.customer_name,
       contact: `+${orderData.customer_phone}`,
@@ -112,14 +112,21 @@ export async function handlePaymentSuccess(paymentLinkId: string, paymentId: str
     throw new Error(`WhatsApp order not found for payment link ${paymentLinkId}`);
   }
 
-  if (wa.payment_status === 'captured') {
+  // Atomic claim: the redirect callback and the webhook can fire together, and only one may proceed.
+  const { data: claimed, error: claimError } = await supabase
+    .from('whatsapp_orders')
+    .update({ razorpay_payment_id: paymentId, payment_status: 'captured', updated_at: new Date() })
+    .eq('id', wa.id)
+    .neq('payment_status', 'captured')
+    .select('id');
+
+  if (claimError) throw new Error(`Payment claim failed: ${claimError.message}`);
+  if (!claimed || claimed.length === 0) {
     return { success: true, alreadyProcessed: true, couponCode: null };
   }
 
-  await supabase
-    .from('whatsapp_orders')
-    .update({ razorpay_payment_id: paymentId, payment_status: 'captured', updated_at: new Date() })
-    .eq('id', wa.id);
+  const { error: stockError } = await supabase.rpc('apply_order_stock', { p_order_id: wa.order_id });
+  if (stockError) console.error('❌ Stock deduction failed:', stockError.message);
 
   await supabase
     .from('orders')
@@ -132,14 +139,16 @@ export async function handlePaymentSuccess(paymentLinkId: string, paymentId: str
     .eq('id', wa.order_id)
     .single();
 
-  const couponCode = await generateCoupon(order?.customer_id);
+  const couponCode = await generateGiveawayCoupon(order?.customer_id, wa.order_id);
 
   try {
     await sendTextMessage(
       wa.phone_number,
       `✅ Payment received!\n\nOrder ${order?.order_number} (₹${order?.total}) is confirmed and our team will process it shortly.` +
-        (couponCode ? `\n\n🎁 Your 10% off coupon for next time: ${couponCode}` : '') +
-        `\n\nThank you for shopping with ibird!`
+        (couponCode
+          ? `\n\n🎁 Your Thar ROXX giveaway coupon: *${couponCode}*\nKeep this code safe. It is your entry in the Thar ROXX giveaway draw.`
+          : '') +
+        `\n\nThank you for shopping with ${STORE_NAME}!`
     );
   } catch (err) {
     console.error('❌ Could not send payment confirmation message');
@@ -149,26 +158,45 @@ export async function handlePaymentSuccess(paymentLinkId: string, paymentId: str
   return { success: true, alreadyProcessed: false, couponCode };
 }
 
-async function generateCoupon(customerId?: string | null) {
-  try {
-    if (!customerId) return null;
-    const couponCode = `IBIRD${Date.now().toString(36).toUpperCase()}`;
-    const validityEnd = new Date();
-    validityEnd.setDate(validityEnd.getDate() + 30);
+// Letters and digits that cannot be confused when read aloud or copied (no 0/O, 1/I/L).
+const COUPON_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
+function randomCouponCode() {
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += COUPON_ALPHABET[crypto.randomInt(COUPON_ALPHABET.length)];
+  }
+  return `THAR-${code}`;
+}
+
+// One Thar ROXX giveaway coupon per paid order. It is an entry code, not a discount.
+async function generateGiveawayCoupon(customerId: string | null | undefined, orderId: string) {
+  if (!customerId) return null;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const couponCode = randomCouponCode();
     const { error } = await supabase.from('coupons').insert({
       customer_id: customerId,
+      order_id: orderId,
       coupon_code: couponCode,
-      discount_percentage: 10,
-      validity_end: validityEnd.toISOString().split('T')[0],
+      discount_percentage: 0,
+      campaign: 'thar-roxx-giveaway',
     });
-    if (error) {
-      console.error('❌ Coupon insert failed:', error.message);
-      return null;
+
+    if (!error) return couponCode;
+    if (error.code === '23505') {
+      // Same order already has its coupon: return it. Otherwise the code clashed, so try another.
+      const { data: existing } = await supabase
+        .from('coupons')
+        .select('coupon_code')
+        .eq('order_id', orderId)
+        .eq('campaign', 'thar-roxx-giveaway')
+        .maybeSingle();
+      if (existing) return existing.coupon_code as string;
+      continue;
     }
-    return couponCode;
-  } catch (error: any) {
-    console.error('❌ Coupon generation failed:', error);
+    console.error('❌ Giveaway coupon insert failed:', error.message);
     return null;
   }
+  return null;
 }

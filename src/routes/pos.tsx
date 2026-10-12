@@ -15,31 +15,40 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { createOrder, fetchCustomers, fetchProducts, type Product } from "@/lib/data";
+import {
+  calculateTotals,
+  channelOf,
+  createOrder,
+  fetchCustomers,
+  fetchProducts,
+  type Product,
+} from "@/lib/data";
 import { formatCurrency } from "@/lib/format";
+import { useRole } from "@/components/role-provider";
 
 export const Route = createFileRoute("/pos")({
   head: () => ({
     meta: [
-      { title: "New Order — ibird Point of Sale" },
+      { title: "Counter Sale — ibird" },
       {
         name: "description",
         content:
-          "Create manual ibird orders at the counter: scan or search products, apply discounts and take cash, card or UPI payments.",
+          "Bill in-store customers at the counter: search or scan products, apply discounts and take cash, card or UPI payments.",
       },
-      { property: "og:title", content: "New Order — ibird Point of Sale" },
+      { property: "og:title", content: "Counter Sale — ibird" },
       {
         property: "og:description",
-        content: "Fast counter billing with live stock, discounts and instant receipts.",
+        content: "Fast counter billing with live stock, discounts and instant order records.",
       },
     ],
   }),
-  component: POS,
+  component: CounterSale,
 });
 
-function POS() {
+function CounterSale() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { can } = useRole();
   const { data: products = [] } = useQuery({ queryKey: ["products"], queryFn: fetchProducts });
   const { data: customers = [] } = useQuery({ queryKey: ["customers"], queryFn: fetchCustomers });
 
@@ -54,9 +63,12 @@ function POS() {
   const [discount, setDiscount] = useState(0);
   const [notes, setNotes] = useState("");
 
+  const canSell = can("edit");
+
   const results = useMemo(() => {
     const q = search.trim().toLowerCase();
     return products
+      .filter((p) => p.active && channelOf(p) === "counter")
       .filter(
         (p) =>
           !q ||
@@ -67,13 +79,16 @@ function POS() {
       .slice(0, 24);
   }, [products, search]);
 
-  const subtotal = cart.reduce((s, i) => s + Number(i.product.price) * i.quantity, 0);
-  const tax = Math.round((subtotal - discount) * 0.05 * 100) / 100;
-  const total = Math.max(0, subtotal - discount + tax);
+  const { subtotal, discount: safeDiscount, tax, total } = calculateTotals(cart, discount);
 
   const add = (product: Product) =>
     setCart((prev) => {
       const found = prev.find((i) => i.product.id === product.id);
+      const inCart = found?.quantity ?? 0;
+      if (inCart + 1 > product.stock) {
+        toast.error(`Only ${product.stock} of ${product.name} in stock`);
+        return prev;
+      }
       if (found)
         return prev.map((i) =>
           i.product.id === product.id ? { ...i, quantity: i.quantity + 1 } : i,
@@ -84,21 +99,30 @@ function POS() {
   const setQty = (id: string, delta: number) =>
     setCart((prev) =>
       prev
-        .map((i) => (i.product.id === id ? { ...i, quantity: i.quantity + delta } : i))
+        .map((i) => {
+          if (i.product.id !== id) return i;
+          const next = i.quantity + delta;
+          if (next > i.product.stock) {
+            toast.error(`Only ${i.product.stock} of ${i.product.name} in stock`);
+            return i;
+          }
+          return { ...i, quantity: next };
+        })
         .filter((i) => i.quantity > 0),
     );
 
   const checkout = useMutation({
     mutationFn: () => {
       const customer = customers.find((c) => c.id === customerId);
-      const selectedName = customerId !== "walkin" ? customer?.name : customerName || "Walk-in customer";
-      const selectedPhone = customerId !== "walkin" ? customer?.phone : customerPhone;
+      const selectedName =
+        customerId !== "walkin" ? customer?.name : customerName.trim() || "Walk-in customer";
+      const selectedPhone = customerId !== "walkin" ? customer?.phone : customerPhone.trim();
 
       return createOrder({
-        customer_id: customerId !== "walkin" ? customer?.id : null,
-        customer_name: selectedName,
+        customer_id: customerId !== "walkin" ? (customer?.id ?? null) : null,
+        customer_name: selectedName ?? "Walk-in customer",
         customer_phone: selectedPhone || null,
-        source: "manual",
+        source: "counter",
         status: "pending",
         payment_method: payment,
         payment_status: "paid",
@@ -106,17 +130,18 @@ function POS() {
         delivery_address: deliveryAddress || null,
         special_instructions: specialInstructions || null,
         items: cart,
-        discount,
+        discount: safeDiscount,
       });
     },
     onSuccess: (order) => {
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
-      toast.success(`Order ${order.order_number} created`);
+      toast.success(`Sale ${order.order_number} recorded`);
       setCart([]);
       setDiscount(0);
       setNotes("");
+      setCustomerId("walkin");
       setCustomerName("");
       setCustomerPhone("");
       setDeliveryAddress("");
@@ -127,7 +152,12 @@ function POS() {
   });
 
   return (
-    <AppShell title="Point of Sale" subtitle="Create and bill a manual order.">
+    <AppShell title="Counter Sale" subtitle="Bill customers who buy at the counter.">
+      {!canSell && (
+        <div className="mb-4 rounded-lg border border-border bg-secondary p-3 text-sm">
+          Your role can view this screen but cannot record sales.
+        </div>
+      )}
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="card-surface p-5 lg:col-span-2">
           <div className="relative">
@@ -141,20 +171,28 @@ function POS() {
             />
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {results.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => add(p)}
-                className="rounded-xl border border-border p-3 text-left transition-colors hover:border-primary hover:bg-secondary"
-              >
-                <p className="truncate text-sm font-semibold">{p.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {p.sku} · {p.stock} in stock
-                </p>
-                <p className="mt-2 font-bold text-primary">{formatCurrency(p.price)}</p>
-              </button>
-            ))}
-            {!results.length && <p className="text-sm text-muted-foreground">No products found.</p>}
+            {results.map((p) => {
+              const out = p.stock <= 0;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => add(p)}
+                  disabled={out || !canSell}
+                  className="rounded-xl border border-border p-3 text-left transition-colors hover:border-primary hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <p className="truncate text-sm font-semibold">{p.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {p.sku} · {out ? "Out of stock" : `${p.stock} in stock`} · GST {Number(p.gst ?? 0)}%
+                  </p>
+                  <p className="mt-2 font-bold text-primary">{formatCurrency(p.price)}</p>
+                </button>
+              );
+            })}
+            {!results.length && (
+              <p className="text-sm text-muted-foreground">
+                No counter products found. Add them in Inventory under "Counter sale products".
+              </p>
+            )}
           </div>
         </div>
 
@@ -191,19 +229,22 @@ function POS() {
           <div className="mt-4 space-y-3 border-t border-border pt-4">
             <div>
               <Label>Customer</Label>
-              <Select value={customerId} onValueChange={(v) => {
-                setCustomerId(v);
-                if (v !== "walkin") {
-                  const c = customers.find((x) => x.id === v);
-                  if (c) {
-                    setCustomerName(c.name);
-                    setCustomerPhone(c.phone || "");
+              <Select
+                value={customerId}
+                onValueChange={(v) => {
+                  setCustomerId(v);
+                  if (v !== "walkin") {
+                    const c = customers.find((x) => x.id === v);
+                    if (c) {
+                      setCustomerName(c.name);
+                      setCustomerPhone(c.phone || "");
+                    }
+                  } else {
+                    setCustomerName("");
+                    setCustomerPhone("");
                   }
-                } else {
-                  setCustomerName("");
-                  setCustomerPhone("");
-                }
-              }}>
+                }}
+              >
                 <SelectTrigger className="mt-1">
                   <SelectValue />
                 </SelectTrigger>
@@ -221,7 +262,7 @@ function POS() {
             {customerId === "walkin" && (
               <>
                 <div>
-                  <Label>Customer name</Label>
+                  <Label>Customer name (optional)</Label>
                   <Input
                     className="mt-1"
                     placeholder="Enter customer name"
@@ -230,10 +271,11 @@ function POS() {
                   />
                 </div>
                 <div>
-                  <Label>Phone number</Label>
+                  <Label>Phone number (optional)</Label>
                   <Input
                     className="mt-1"
-                    placeholder="Customer phone (for WhatsApp orders)"
+                    inputMode="tel"
+                    placeholder="Saves the customer, and links repeat purchases"
                     value={customerPhone}
                     onChange={(e) => setCustomerPhone(e.target.value)}
                   />
@@ -242,11 +284,11 @@ function POS() {
             )}
 
             <div>
-              <Label>Delivery address</Label>
+              <Label>Address (optional, if the order is delivered)</Label>
               <Textarea
                 className="mt-1"
                 rows={2}
-                placeholder="Enter delivery address (required for WhatsApp orders)"
+                placeholder="Delivery address"
                 value={deliveryAddress}
                 onChange={(e) => setDeliveryAddress(e.target.value)}
               />
@@ -257,7 +299,7 @@ function POS() {
               <Textarea
                 className="mt-1"
                 rows={2}
-                placeholder="Any special cooking instructions or customization requests"
+                placeholder="Gift wrap, customisation or other requests"
                 value={specialInstructions}
                 onChange={(e) => setSpecialInstructions(e.target.value)}
               />
@@ -302,8 +344,14 @@ function POS() {
                 <span>Subtotal</span>
                 <span className="font-medium text-foreground">{formatCurrency(subtotal)}</span>
               </div>
+              {safeDiscount > 0 && (
+                <div className="flex justify-between">
+                  <span>Discount</span>
+                  <span className="font-medium text-foreground">- {formatCurrency(safeDiscount)}</span>
+                </div>
+              )}
               <div className="flex justify-between">
-                <span>Tax (5%)</span>
+                <span>Tax (GST per product)</span>
                 <span className="font-medium text-foreground">{formatCurrency(tax)}</span>
               </div>
               <div className="flex justify-between text-base font-bold text-foreground">
@@ -314,10 +362,10 @@ function POS() {
             <Button
               className="w-full"
               size="lg"
-              disabled={!cart.length || checkout.isPending}
+              disabled={!cart.length || checkout.isPending || !canSell}
               onClick={() => checkout.mutate()}
             >
-              Complete sale
+              {checkout.isPending ? "Recording sale..." : "Complete sale"}
             </Button>
           </div>
         </div>

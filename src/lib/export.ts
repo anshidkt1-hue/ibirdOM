@@ -21,7 +21,7 @@ export function exportCSV(rows: ExportRow[], filename: string) {
     headers.join(","),
     ...rows.map((r) => headers.map((h) => escape(r[h])).join(",")),
   ].join("\n");
-  download(new Blob([csv], { type: "text/csv;charset=utf-8;" }), `${filename}.csv`);
+  download(new Blob(["﻿", csv], { type: "text/csv;charset=utf-8;" }), `${filename}.csv`);
 }
 
 export function exportExcel(rows: ExportRow[], filename: string) {

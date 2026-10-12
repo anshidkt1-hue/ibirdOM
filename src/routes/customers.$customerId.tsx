@@ -93,6 +93,12 @@ function CustomerDetail() {
                   {customer.city || customer.state ? `${customer.city || ""}${customer.state ? `, ${customer.state}` : ""}` : "—"}
                 </p>
               </div>
+              <div>
+                <p className="text-xs font-semibold uppercase text-muted-foreground flex items-center gap-2">
+                  <MapPin className="size-3" /> Delivery address
+                </p>
+                <p className="mt-1 text-sm">{customer.address || "—"}</p>
+              </div>
             </div>
           </div>
 
