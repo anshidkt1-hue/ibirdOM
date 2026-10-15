@@ -37,6 +37,7 @@ export type InvoicePdfData = {
     line_total: number;
     tax_rate?: number | null | undefined;
     tax_amount?: number | null | undefined;
+    image?: string | null | undefined; // product photo as a JPEG/PNG data: URL
   }[];
 };
 
@@ -49,11 +50,13 @@ export const INVOICE_FONT_FILES: Record<keyof InvoiceFonts, string> = {
   bold: "Poppins_700Bold.ttf",
 };
 
+// logo: the ibird logo as a PNG data: URL (640 x 458, transparent)
 export type InvoicePdfOptions = { fonts?: InvoiceFonts | null; logo?: string | null };
 
 type RGB = [number, number, number];
-const RED: RGB = [190, 18, 32];
-const NAVY: RGB = [28, 26, 74];
+// Colours of the ibird logo
+const RED: RGB = [186, 12, 22];
+const NAVY: RGB = [24, 6, 64];
 const INK: RGB = [38, 38, 58];
 const MUTED: RGB = [110, 108, 135];
 const LAVENDER: RGB = [236, 234, 246];
@@ -97,13 +100,6 @@ export function amountInWords(amount: number) {
   const words = parts.join(" ") || "Zero";
   return `Rupees ${words}${paise ? ` and ${below1000(paise)} Paise` : ""} Only`;
 }
-
-// Whole rupees without decimals (2,999); otherwise always two decimals (2,042.50)
-const num = (n: number) => {
-  const v = Math.round(Number(n || 0) * 100) / 100;
-  const d = Number.isInteger(v) ? 0 : 2;
-  return v.toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
-};
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-IN", {
@@ -173,7 +169,7 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
   // ---------- Header ----------
   if (options.logo) {
     try {
-      doc.addImage(options.logo, M, 9, 40, 22, undefined, "FAST");
+      doc.addImage(options.logo, "PNG", M, 8, 34, 24.3, undefined, "FAST");
     } catch {
       /* fall back to the drawn mark below */
     }
@@ -272,134 +268,153 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
   }
   y += toH + 5;
 
-  // ---------- Items ----------
-  const cols = { sno: M, desc: M + 16, items: 118, amount: 148, end: W - M };
-  const tableTop = y;
+  // ---------- Items: per-product GST and product photo ----------
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const amt = (n: number) =>
+    Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const lineTax = (i: InvoicePdfData["items"][number]) =>
+    i.tax_amount != null ? Number(i.tax_amount) : r2((Number(i.line_total) * Number(i.tax_rate ?? 0)) / 100);
+  const rates = [...new Set(data.items.map((i) => Number(i.tax_rate ?? 0)))];
+  const oneRate = rates.length === 1;
+  const totQty = data.items.reduce((s, i) => s + Number(i.quantity), 0);
+  const totLine = r2(data.items.reduce((s, i) => s + Number(i.line_total), 0));
+  const totTax = r2(data.items.reduce((s, i) => s + lineTax(i), 0));
+
+  const PHOTO = 13;
+  const hasPhotos = data.items.some((i) => i.image);
+  const textX = hasPhotos ? PHOTO + 5 : 3;
+  const itemW = 64;
+  const nameLines = (i: InvoicePdfData["items"][number]) => {
+    font("semibold", 8.5, INK);
+    return doc.splitTextToSize(i.name, itemW - textX - 2) as string[];
+  };
+  const detailOf = (i: InvoicePdfData["items"][number]) =>
+    [i.hsn ? `HSN ${i.hsn}` : null, i.sku ? `SKU ${i.sku}` : null].filter(Boolean).join("  ·  ");
+
   autoTable(doc, {
     startY: y,
     margin: { left: M, right: M, top: 16, bottom: 20 },
-    head: [["S.NO", "ITEM DESCRIPTION", "ITEMS", `AMOUNT (${rupee})`]],
+    head: [["No", "Item", "Qty/Nos", "Rate", "Total", oneRate ? `Tax ${rates[0]}%` : "Tax (GST)", "Total Value"]],
     body: data.items.map((i, idx) => {
-      const details = [
-        i.hsn ? `HSN ${i.hsn}` : null,
-        `GST ${Number(i.tax_rate ?? 0)}%`,
-        `${rupee}${num(i.unit_price)} each`,
-      ].filter(Boolean).join("  ·  ");
-      return [`${idx + 1}.`, `${i.name}\n${details}`, String(i.quantity), num(i.line_total)];
+      const tax = lineTax(i);
+      return [
+        String(idx + 1),
+        "",
+        String(i.quantity),
+        amt(i.unit_price),
+        amt(i.line_total),
+        oneRate ? amt(tax) : `${amt(tax)}\n(${Number(i.tax_rate ?? 0)}%)`,
+        amt(Number(i.line_total) + tax),
+      ];
     }),
-    theme: "plain",
+    foot: [["", "Total", String(totQty), "", amt(totLine), amt(totTax), amt(totLine + totTax)]],
+    showFoot: "lastPage",
+    theme: "grid",
     styles: {
       font: F,
-      fontSize: 8.5,
+      fontSize: 8.3,
       textColor: INK,
-      cellPadding: { top: 3, bottom: 3, left: 3, right: 3 },
+      cellPadding: { top: 2.6, bottom: 2.6, left: 2.2, right: 2.2 },
       lineColor: LINE,
-      lineWidth: { bottom: 0.25 },
+      lineWidth: 0.25,
       valign: "middle",
+      halign: "right",
     },
-    headStyles: { fillColor: LAVENDER, textColor: NAVY, fontStyle: "semibold" as any, fontSize: 7.5 },
+    headStyles: { fillColor: LAVENDER, textColor: NAVY, fontStyle: "semibold" as any, fontSize: 8, halign: "center" },
+    footStyles: { fillColor: LAVENDER, textColor: NAVY, fontStyle: "bold" as any, fontSize: 8.5 },
+    bodyStyles: { fillColor: WHITE, minCellHeight: hasPhotos ? PHOTO + 4 : 11 },
     columnStyles: {
-      0: { cellWidth: cols.desc - cols.sno, halign: "center" },
-      1: { cellWidth: cols.items - cols.desc },
-      2: { cellWidth: cols.amount - cols.items, halign: "center" },
-      3: { cellWidth: cols.end - cols.amount, halign: "right", fontStyle: "semibold" as any },
+      0: { cellWidth: 10, halign: "center" },
+      1: { cellWidth: itemW, halign: "left" },
+      2: { cellWidth: 16, halign: "center" },
+      3: { cellWidth: 22 },
+      4: { cellWidth: 24 },
+      5: { cellWidth: 22 },
+      6: { cellWidth: 24, fontStyle: "semibold" as any },
     },
     willDrawPage: (hook) => {
       if (hook.pageNumber > 1) pageBackground();
     },
     didParseCell: (hook) => {
-      if (hook.section === "head" && hook.column.index === 3) hook.cell.styles.halign = "right";
-      // The description is drawn by hand below (name + small details line); keep two blank lines for height
-      if (hook.section === "body" && hook.column.index === 1) hook.cell.text = [" ", " "];
-    },
-    didDrawCell: (hook) => {
-      // Second line of the description in small grey text
+      if (hook.section === "foot" && hook.column.index === 1) hook.cell.styles.halign = "center";
+      // The item cell is drawn by hand (photo, name, HSN/SKU); reserve its height with blank lines
       if (hook.section === "body" && hook.column.index === 1) {
-        const [name, details] = String(hook.cell.raw).split("\n");
-        const c = hook.cell;
-        font("normal", 8.5, INK);
-        doc.text(name ?? "", c.x + 3, c.y + c.height / 2 - 0.8);
-        font("normal", 6.8, MUTED);
-        doc.text(details ?? "", c.x + 3, c.y + c.height / 2 + 3);
+        const item = data.items[hook.row.index]!;
+        hook.cell.text = Array(nameLines(item).length + (detailOf(item) ? 1 : 0)).fill(" ");
       }
     },
-    bodyStyles: { fillColor: WHITE, minCellHeight: 13 },
+    didDrawCell: (hook) => {
+      if (hook.section !== "body" || hook.column.index !== 1) return;
+      const item = data.items[hook.row.index]!;
+      const c = hook.cell;
+      if (item.image) {
+        const px = c.x + 2;
+        const py = c.y + (c.height - PHOTO) / 2;
+        try {
+          const fmt = /^data:image\/png/i.test(item.image) ? "PNG" : "JPEG";
+          doc.addImage(item.image, fmt, px, py, PHOTO, PHOTO, undefined, "FAST");
+        } catch {
+          doc.setFillColor(...LAVENDER);
+          doc.rect(px, py, PHOTO, PHOTO, "F");
+        }
+        doc.setDrawColor(...LINE);
+        doc.setLineWidth(0.25);
+        doc.roundedRect(px, py, PHOTO, PHOTO, 1, 1, "S");
+      }
+      const lines = nameLines(item);
+      const detail = detailOf(item);
+      const blockH = lines.length * 3.6 + (detail ? 3.4 : 0);
+      let ty = c.y + (c.height - blockH) / 2 + 2.8;
+      font("semibold", 8.5, INK);
+      doc.text(lines, c.x + textX, ty);
+      ty += lines.length * 3.6;
+      if (detail) {
+        font("normal", 6.6, MUTED);
+        doc.text(detail, c.x + textX, ty);
+      }
+    },
   });
 
-  const tableEnd = (doc as any).lastAutoTable.finalY as number;
-  const lastTablePage = doc.getNumberOfPages();
-
-  // Totals block (right two columns), with the amount in words on the left
-  const totals: [string, string][] = [
-    ["TOTAL ITEMS", String(data.items.reduce((s, i) => s + Number(i.quantity), 0))],
-    ["SUBTOTAL", num(data.subtotal)],
-    ...(data.discount > 0 ? ([["DISCOUNT", `- ${num(data.discount)}`]] as [string, string][]) : []),
-    ["CGST", num(data.tax / 2)],
-    ["SGST", num(data.tax / 2)],
-  ];
-  const rowH = 7;
-  const totalsH = totals.length * rowH + 10;
+  y = (doc as any).lastAutoTable.finalY as number;
   const NOTES_H = 46;
   const FOOTER_H = 34;
-  const reserved = totalsH + 6 + NOTES_H + 6 + FOOTER_H;
-
-  let blockTop = tableEnd;
-  if (blockTop + reserved > H) {
+  const SUMMARY_H = (data.discount > 0 ? 8 : 0) + 12 + 14;
+  if (y + SUMMARY_H + 6 + NOTES_H + 6 + FOOTER_H > H) {
     doc.addPage();
     pageBackground();
-    blockTop = 16;
+    y = 16;
   }
-  // Stretch the table body down so the notes and footer sit at the bottom, like the printed bill
-  const fillTo = H - FOOTER_H - 6 - NOTES_H - 6 - totalsH;
-  const onTablePage = doc.getNumberOfPages() === lastTablePage;
-  const extendFrom = onTablePage ? tableEnd : blockTop;
-  const totalsTop = Math.max(blockTop, fillTo);
 
-  doc.setFillColor(...WHITE);
-  doc.rect(M, extendFrom, W - 2 * M, totalsTop - extendFrom, "F");
-  doc.setDrawColor(...LINE);
-  doc.setLineWidth(0.25);
-  // Column rules through the body and the empty area
-  const ruleTop = onTablePage ? tableTop : blockTop;
-  for (const x of [cols.desc, cols.items, cols.amount]) {
-    doc.line(x, ruleTop, x, totalsTop);
-  }
-  doc.line(cols.items, totalsTop, cols.items, totalsTop + totalsH);
-
-  // Totals rows
-  doc.setFillColor(...WHITE);
-  doc.rect(M, totalsTop, W - 2 * M, totalsH, "F");
-  doc.line(M, totalsTop, W - M, totalsTop);
-  totals.forEach(([label, value], i) => {
-    const ry = totalsTop + i * rowH + 4.8;
-    font("medium", 7.5, NAVY);
-    doc.text(label, (cols.items + cols.amount) / 2, ry, { align: "center" });
+  // Discount (shared across the lines before GST), then the grand total band
+  if (data.discount > 0) {
+    doc.setFillColor(...WHITE);
+    doc.setDrawColor(...LINE);
+    doc.setLineWidth(0.25);
+    doc.rect(M, y, W - 2 * M, 8, "FD");
+    font("medium", 8, NAVY);
+    doc.text("DISCOUNT", W - M - 40, y + 5.3, { align: "right" });
     font("semibold", 8.5, INK);
-    doc.text(value, cols.end - 3, ry, { align: "right" });
-  });
-  const bandY = totalsTop + totals.length * rowH + 1;
-  // Red band whose bottom-right corner follows the rounded table frame
+    doc.text(`- ${amt(data.discount)}`, W - M - 2.2, y + 5.3, { align: "right" });
+    y += 8;
+  }
   doc.setFillColor(...RED);
-  doc.roundedRect(cols.items, bandY, cols.end - cols.items, 9, 3, 3, "F");
-  doc.rect(cols.items, bandY, cols.end - cols.items, 5, "F");
-  doc.rect(cols.items, bandY, cols.end - cols.items - 4, 9, "F");
-  font("bold", 9, WHITE);
-  doc.text("TOTAL INVOICE", (cols.items + cols.amount) / 2, bandY + 6, { align: "center" });
-  doc.text(`${rupee}${num(data.total)}`, cols.end - 3, bandY + 6, { align: "right" });
+  doc.rect(M, y, W - 2 * M, 11, "F");
+  font("bold", 10, WHITE);
+  doc.text("GRAND TOTAL (INVOICE)", W - M - 40, y + 7.2, { align: "right", charSpace: 0.4 });
+  doc.text(`${rupee}${amt(data.total)}`, W - M - 2.2, y + 7.2, { align: "right" });
+  y += 11;
 
   font("semibold", 7.5, RED);
-  doc.text("AMOUNT IN WORDS", M + 4, totalsTop + 6);
+  doc.text("AMOUNT IN WORDS", M, y + 6);
   font("normal", 8, INK);
-  doc.text(doc.splitTextToSize(amountInWords(data.total), cols.items - M - 8), M + 4, totalsTop + 11);
-
-  // Frame around the whole table
-  const frameTop = onTablePage ? tableTop : blockTop;
-  doc.setDrawColor(...LINE);
-  doc.setLineWidth(0.35);
-  doc.roundedRect(M, frameTop, W - 2 * M, totalsTop + totalsH - frameTop, 3, 3, "S");
+  doc.text(amountInWords(data.total), M + 30, y + 6);
+  font("normal", 7.5, MUTED);
+  doc.text(`GST included: CGST ${rupee}${amt(data.tax / 2)}  +  SGST ${rupee}${amt(data.tax / 2)}`, M, y + 11);
+  y += 14;
 
   // ---------- Invoice note ----------
-  const notesTop = totalsTop + totalsH + 6;
+  // Notes and footer sit at the bottom of the page, like the printed bill
+  const notesTop = Math.max(y, H - FOOTER_H - 6 - NOTES_H);
   panel(M, notesTop, W - 2 * M, NOTES_H);
   font("bold", 8.5, RED);
   doc.text("INVOICE NOTE:", M + 5, notesTop + 7);

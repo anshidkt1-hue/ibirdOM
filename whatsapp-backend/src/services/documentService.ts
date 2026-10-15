@@ -21,6 +21,16 @@ const FONT_FILES = ['400Regular', '500Medium', '600SemiBold', '700Bold', '800Ext
   path.join(FONT_DIR, w, `Poppins_${w}.ttf`)
 );
 
+// ibird logo for the invoice header (assets/ibird-logo.png, kept next to src/ and dist/)
+const INVOICE_LOGO = (() => {
+  try {
+    return `data:image/png;base64,${fs.readFileSync(path.join(__dirname, '..', '..', 'assets', 'ibird-logo.png')).toString('base64')}`;
+  } catch {
+    console.warn('⚠️ assets/ibird-logo.png not found: invoices use the drawn logo');
+    return null;
+  }
+})();
+
 // The same Poppins files, base64-encoded for the invoice PDF (₹ sign and the invoice look)
 const INVOICE_FONTS = Object.fromEntries(
   Object.entries(INVOICE_FONT_FILES).map(([k, file]) => {
@@ -47,9 +57,14 @@ export async function buildInvoiceData(orderId: string): Promise<InvoicePdfData 
 
   const productIds = (items || []).map((i: any) => i.product_id).filter(Boolean);
   const { data: products } = productIds.length
-    ? await supabase.from('products').select('id, hsn_code').in('id', productIds)
+    ? await supabase.from('products').select('id, hsn_code, image_url').in('id', productIds)
     : { data: [] as any[] };
   const hsn = new Map((products || []).map((p: any) => [p.id, p.hsn_code]));
+  const photos = new Map(
+    await Promise.all(
+      (products || []).map(async (p: any) => [p.id, await productThumbnail(p.image_url)] as const)
+    )
+  );
 
   return {
     invoice_number: invoice.invoice_number,
@@ -69,6 +84,7 @@ export async function buildInvoiceData(orderId: string): Promise<InvoicePdfData 
       name: i.product_name,
       sku: i.sku,
       hsn: hsn.get(i.product_id) || null,
+      image: photos.get(i.product_id) ?? null,
       quantity: Number(i.quantity),
       unit_price: Number(i.unit_price),
       line_total: Number(i.line_total),
@@ -76,6 +92,18 @@ export async function buildInvoiceData(orderId: string): Promise<InvoicePdfData 
       tax_amount: i.tax_amount,
     })),
   };
+}
+
+// Small square product photo for the invoice (full-size photos would make the PDF several MB)
+async function productThumbnail(url: string | null | undefined) {
+  const href = await imageAsDataUri(url);
+  if (!href) return null;
+  try {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#fff"/><image href="${href}" width="200" height="200" preserveAspectRatio="xMidYMid slice"/></svg>`;
+    return `data:image/png;base64,${Buffer.from(new Resvg(svg).render().asPng()).toString('base64')}`;
+  } catch {
+    return null;
+  }
 }
 
 async function imageAsDataUri(url: string | null | undefined) {
@@ -141,7 +169,7 @@ export async function sendPaymentDocuments(orderId: string, phoneNumber: string)
   try {
     const data = await buildInvoiceData(orderId);
     if (data) {
-      const pdf = Buffer.from(buildInvoicePdf(data, { fonts: INVOICE_FONTS }).output('arraybuffer'));
+      const pdf = Buffer.from(buildInvoicePdf(data, { fonts: INVOICE_FONTS, logo: INVOICE_LOGO }).output('arraybuffer'));
       const fileName = invoiceFileName(data.invoice_number);
       const link = await upload(`invoices/${fileName}`, pdf, 'application/pdf');
       await sendDocument(phoneNumber, link, fileName, `🧾 Invoice ${data.invoice_number} for order ${data.order_number}`);

@@ -99,9 +99,12 @@ async function invoicePdfData(invoice: Invoice): Promise<InvoicePdfData> {
   if (error) throw error;
   const productIds = ((items ?? []) as any[]).map((i) => i.product_id).filter(Boolean);
   const { data: products } = productIds.length
-    ? await db.from("products").select("id, hsn_code").in("id", productIds)
+    ? await db.from("products").select("id, hsn_code, image_url").in("id", productIds)
     : { data: [] };
   const hsn = new Map(((products ?? []) as any[]).map((p) => [p.id, p.hsn_code]));
+  const photos = new Map(
+    await Promise.all(((products ?? []) as any[]).map(async (p) => [p.id, await productThumbnail(p.image_url)] as const)),
+  );
 
   return {
     invoice_number: invoice.invoice_number,
@@ -121,6 +124,7 @@ async function invoicePdfData(invoice: Invoice): Promise<InvoicePdfData> {
       name: i.product_name,
       sku: i.sku,
       hsn: hsn.get(i.product_id) ?? null,
+      image: photos.get(i.product_id) ?? null,
       quantity: Number(i.quantity),
       unit_price: Number(i.unit_price),
       line_total: Number(i.line_total),
@@ -128,6 +132,42 @@ async function invoicePdfData(invoice: Invoice): Promise<InvoicePdfData> {
       tax_amount: i.tax_amount,
     })),
   };
+}
+
+// Small square product photo for the invoice (full-size photos would make the PDF several MB)
+async function productThumbnail(url: string | null | undefined): Promise<string | null> {
+  if (!url) return null;
+  try {
+    const blob = await (await fetch(url)).blob();
+    const bitmap = await createImageBitmap(blob);
+    const size = 200;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, size, size);
+    const scale = Math.max(size / bitmap.width, size / bitmap.height);
+    const w = bitmap.width * scale;
+    const h = bitmap.height * scale;
+    ctx.drawImage(bitmap, (size - w) / 2, (size - h) / 2, w, h);
+    bitmap.close();
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return null;
+  }
+}
+
+let logoPromise: Promise<string | null> | null = null;
+function loadLogo() {
+  logoPromise ??= fetch("/brand/ibird-logo.png")
+    .then((r) => (r.ok ? r.blob() : Promise.reject(new Error("logo missing"))))
+    .then((blob) => toDataUri(URL.createObjectURL(blob)))
+    .catch(() => {
+      logoPromise = null;
+      return null;
+    });
+  return logoPromise;
 }
 
 // Poppins (served from /fonts) gives the invoice its look and the ₹ sign; loaded once per session
@@ -154,7 +194,8 @@ function loadInvoiceFonts() {
 
 export async function downloadInvoicePdf(invoice: Invoice) {
   const [data, fonts] = await Promise.all([invoicePdfData(invoice), loadInvoiceFonts()]);
-  buildInvoicePdf(data, { fonts }).save(invoiceFileName(invoice.invoice_number));
+  const logo = await loadLogo();
+  buildInvoicePdf(data, { fonts, logo }).save(invoiceFileName(invoice.invoice_number));
 }
 
 // ---------- Coupons ----------
