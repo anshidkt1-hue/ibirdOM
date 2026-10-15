@@ -14,8 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { couponSvgFor, downloadCouponPng, downloadInvoicePdf, ensureInvoice, fetchOrderInvoice } from "@/lib/documents";
-import { fetchSettings, fetchOrder, fetchOrderCoupon,updateOrderStatus, fetchOrderStatusHistory, fetchOrderAssignmentHistory, fetchEmployees, recordStatusChange, recordAssignmentChange, type OrderStatusHistory, type OrderAssignmentHistory, type Employee } from "@/lib/data";
+import { couponSvgFor, downloadCouponPng, downloadCouponsPdf, downloadInvoicePdf, ensureInvoice, fetchOrderCoupons, fetchOrderInvoice, type Coupon, type CouponArtInput } from "@/lib/documents";
+import { fetchSettings, fetchOrder, updateOrderStatus, fetchOrderStatusHistory, fetchOrderAssignmentHistory, fetchEmployees, recordStatusChange, recordAssignmentChange, type OrderStatusHistory, type OrderAssignmentHistory, type Employee } from "@/lib/data";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { useRole } from "@/components/role-provider";
 
@@ -60,9 +60,9 @@ function OrderDetail() {
     queryKey: ["employees"],
     queryFn: fetchEmployees,
   });
-  const { data: giveawayCoupon } = useQuery({
-    queryKey: ["order-coupon", orderId],
-    queryFn: () => fetchOrderCoupon(orderId),
+  const { data: coupons = [] } = useQuery({
+    queryKey: ["order-coupons", orderId],
+    queryFn: () => fetchOrderCoupons(orderId),
   });
 
   const mutate = useMutation({
@@ -237,12 +237,8 @@ function OrderDetail() {
         <div className="space-y-4">
           <InvoiceCard orderId={orderId} paid={order.payment_status === "paid" || order.payment_status === "refunded"} />
 
-          {giveawayCoupon && (
-            <CouponCard
-              code={giveawayCoupon}
-              customerName={order.customer_name}
-              orderNumber={order.order_number}
-            />
+          {coupons.length > 0 && (
+            <CouponCard coupons={coupons} customerName={order.customer_name} orderNumber={order.order_number} />
           )}
 
           <div className="card-surface p-5">
@@ -431,38 +427,81 @@ function InvoiceCard({ orderId, paid }: { orderId: string; paid: boolean }) {
   );
 }
 
-function CouponCard({ code, customerName, orderNumber }: { code: string; customerName: string; orderNumber: string }) {
+// One coupon per product unit: the first is previewed, all are listed, one or all can be downloaded
+function CouponCard({ coupons, customerName, orderNumber }: { coupons: Coupon[]; customerName: string; orderNumber: string }) {
+  const [busy, setBusy] = useState(false);
   const { data: settings } = useQuery({
     queryKey: ["settings"],
     queryFn: () => fetchSettings().catch(() => ({}) as Awaited<ReturnType<typeof fetchSettings>>),
   });
-  const art = {
-    code,
+  const arts: CouponArtInput[] = coupons.map((c) => ({
+    code: c.coupon_code,
     customerName,
     orderNumber,
+    issuedAt: c.created_at,
+    productName: c.product_name,
+    seq: c.coupon_seq,
+    total: c.coupon_total ?? coupons.length,
     storeName: settings?.company_name || "ibird",
     imageUrl: settings?.giveaway_image_url ?? null,
+  }));
+  const first = arts[0]!;
+  const { data: svg } = useQuery({ queryKey: ["coupon-svg", first], queryFn: () => couponSvgFor(first), staleTime: Infinity });
+
+  const downloadAll = async () => {
+    setBusy(true);
+    try {
+      await downloadCouponsPdf(arts, orderNumber);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not create the PDF");
+    } finally {
+      setBusy(false);
+    }
   };
-  const { data: svg } = useQuery({ queryKey: ["coupon-svg", art], queryFn: () => couponSvgFor(art), staleTime: Infinity });
 
   return (
     <div className="card-surface p-5">
       <h2 className="flex items-center gap-2 text-lg font-bold">
-        <Ticket className="size-5" /> Thar ROXX coupon
+        <Ticket className="size-5" /> Thar ROXX coupon{coupons.length > 1 ? `s (${coupons.length})` : ""}
       </h2>
-      <p className="mt-2 font-mono text-sm font-bold">{code}</p>
       <div className="mt-3 aspect-[1200/630] w-full overflow-hidden rounded-lg bg-secondary">
         {svg && (
-          <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`} alt={`Coupon ${code}`} className="size-full" />
+          <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`} alt={`Coupon ${first.code}`} className="size-full" />
         )}
       </div>
-      <Button
-        variant="outline"
-        className="mt-3 w-full gap-2"
-        onClick={() => downloadCouponPng(art).catch((e: Error) => toast.error(e.message))}
-      >
-        <Download className="size-4" /> Download coupon image
-      </Button>
+      <ul className="mt-3 divide-y divide-border rounded-lg border border-border">
+        {arts.map((a) => (
+          <li key={a.code} className="flex items-center gap-2 px-3 py-2">
+            <span className="w-6 shrink-0 text-xs text-muted-foreground">{a.seq ?? ""}.</span>
+            <span className="min-w-0 flex-1">
+              <span className="block font-mono text-sm font-bold">{a.code}</span>
+              {a.productName && <span className="block truncate text-xs text-muted-foreground">{a.productName}</span>}
+            </span>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-8 shrink-0"
+              title="Download this coupon"
+              onClick={() => downloadCouponPng(a).catch((e: Error) => toast.error(e.message))}
+            >
+              <Download className="size-4" />
+            </Button>
+          </li>
+        ))}
+      </ul>
+      {coupons.length > 1 ? (
+        <Button variant="outline" className="mt-3 w-full gap-2" disabled={busy} onClick={downloadAll}>
+          <Download className="size-4" /> {busy ? "Preparing PDF…" : `Download all ${coupons.length} coupons (PDF)`}
+        </Button>
+      ) : (
+        <Button
+          variant="outline"
+          className="mt-3 w-full gap-2"
+          onClick={() => downloadCouponPng(first).catch((e: Error) => toast.error(e.message))}
+        >
+          <Download className="size-4" /> Download coupon image
+        </Button>
+      )}
     </div>
   );
 }

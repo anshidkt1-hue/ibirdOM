@@ -10,6 +10,7 @@ import {
   type InvoicePdfData,
 } from '../lib/invoice-pdf';
 import { couponSvg, COUPON_WIDTH } from '../lib/coupon-design';
+import { buildCouponsPdf, couponsFileName } from '../lib/coupon-pdf';
 import { sendDocument, sendImage, STORE_NAME } from './whatsappService';
 
 const BUCKET = 'documents';
@@ -90,26 +91,42 @@ async function imageAsDataUri(url: string | null | undefined) {
   }
 }
 
-export async function renderCouponPng(coupon: {
+type CouponRow = {
+  id: string;
   coupon_code: string;
-  customer_name?: string | null;
-  order_number?: string | null;
-  created_at?: string | null;
-}) {
+  created_at: string | null;
+  product_name: string | null;
+  coupon_seq: number | null;
+  coupon_total: number | null;
+};
+
+async function couponArtSettings() {
   const { data: settings } = await supabase
     .from('settings')
     .select('company_name, giveaway_image_url')
     .order('created_at')
     .limit(1)
     .maybeSingle();
-
-  const svg = couponSvg({
-    code: coupon.coupon_code,
-    customerName: coupon.customer_name,
-    orderNumber: coupon.order_number,
-    issuedAt: coupon.created_at,
+  return {
     storeName: settings?.company_name || STORE_NAME,
     imageHref: await imageAsDataUri(settings?.giveaway_image_url),
+  };
+}
+
+export async function renderCouponPng(
+  coupon: CouponRow,
+  order: { order_number?: string | null; customer_name?: string | null },
+  art: { storeName: string; imageHref: string | null }
+) {
+  const svg = couponSvg({
+    code: coupon.coupon_code,
+    customerName: order.customer_name,
+    orderNumber: order.order_number,
+    issuedAt: coupon.created_at,
+    productName: coupon.product_name,
+    seq: coupon.coupon_seq,
+    total: coupon.coupon_total,
+    ...art,
   });
 
   const png = new Resvg(svg, {
@@ -119,7 +136,7 @@ export async function renderCouponPng(coupon: {
   return Buffer.from(png);
 }
 
-// After payment: the invoice PDF, then the giveaway coupon image, each sent once
+// After payment: the invoice PDF, then the giveaway coupon(s)
 export async function sendPaymentDocuments(orderId: string, phoneNumber: string) {
   try {
     const data = await buildInvoiceData(orderId);
@@ -137,34 +154,57 @@ export async function sendPaymentDocuments(orderId: string, phoneNumber: string)
     console.error('❌ Invoice send failed:', error.response?.data || error.message);
   }
 
+  // Coupons: one product unit = one coupon. A single coupon goes as an image; several go as one PDF
   try {
-    const { data: coupon } = await supabase
+    const { data: rows } = await supabase
       .from('coupons')
-      .select('id, coupon_code, created_at, order_id')
+      .select('id, coupon_code, created_at, product_name, coupon_seq, coupon_total')
       .eq('order_id', orderId)
       .eq('campaign', 'thar-roxx-giveaway')
-      .maybeSingle();
-    if (!coupon) return;
+      .order('coupon_seq');
+    const coupons = (rows || []) as CouponRow[];
+    if (!coupons.length) return;
 
     const { data: order } = await supabase
       .from('orders')
       .select('order_number, customer_name')
       .eq('id', orderId)
       .single();
+    const art = await couponArtSettings();
+    const pngs = coupons.map((c) => renderCouponPng(c, order || {}, art));
+    const ids = coupons.map((c) => c.id);
 
-    const png = await renderCouponPng({
-      coupon_code: coupon.coupon_code,
-      customer_name: order?.customer_name,
-      order_number: order?.order_number,
-      created_at: coupon.created_at,
-    });
-    const link = await upload(`coupons/${coupon.coupon_code}.png`, png, 'image/png');
-    await sendImage(
+    if (coupons.length === 1) {
+      const c = coupons[0];
+      const link = await upload(`coupons/${c.coupon_code}.png`, await pngs[0], 'image/png');
+      await sendImage(
+        phoneNumber,
+        link,
+        `🎁 Your Thar ROXX giveaway coupon: *${c.coupon_code}*${c.product_name ? `\nFor: ${c.product_name}` : ''}\nKeep it safe. It is your entry in the draw.`
+      );
+      await supabase.from('coupons').update({ image_url: link, sent_at: new Date() }).in('id', ids);
+      return;
+    }
+
+    const images = await Promise.all(pngs);
+    const pdf = buildCouponsPdf(
+      coupons.map((c, i) => ({
+        png: images[i].toString('base64'),
+        code: c.coupon_code,
+        seq: c.coupon_seq,
+        productName: c.product_name,
+      })),
+      { orderNumber: order?.order_number || '', customerName: order?.customer_name, storeName: art.storeName }
+    );
+    const fileName = couponsFileName(order?.order_number || orderId);
+    const link = await upload(`coupons/${fileName}`, Buffer.from(pdf.output('arraybuffer')), 'application/pdf');
+    await sendDocument(
       phoneNumber,
       link,
-      `🎁 Your Thar ROXX giveaway coupon: *${coupon.coupon_code}*\nKeep it safe. It is your entry in the draw.`
+      fileName,
+      `🎁 Your ${coupons.length} Thar ROXX giveaway coupons for order ${order?.order_number}, one for each product`
     );
-    await supabase.from('coupons').update({ image_url: link, sent_at: new Date() }).eq('id', coupon.id);
+    await supabase.from('coupons').update({ image_url: link, sent_at: new Date() }).in('id', ids);
   } catch (error: any) {
     console.error('❌ Coupon send failed:', error.response?.data || error.message);
   }

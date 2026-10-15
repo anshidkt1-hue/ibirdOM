@@ -6,6 +6,10 @@ export type CouponArt = {
   code: string;
   customerName?: string | null | undefined;
   orderNumber?: string | null | undefined;
+  // Coupons are issued per product: which product, and its number within the order (1 of 3)
+  productName?: string | null | undefined;
+  seq?: number | null | undefined;
+  total?: number | null | undefined;
   issuedAt?: string | null | undefined;
   storeName?: string | null | undefined;
   // Photo of the Thar ROXX (data: URI or URL). Without one, a drawn SUV is used.
@@ -48,6 +52,8 @@ export function couponSvg(c: CouponArt) {
   const code = esc(c.code);
   const name = c.customerName ? esc(clip(c.customerName, 26)) : "";
   const order = c.orderNumber ? esc(c.orderNumber) : "";
+  const product = c.productName ? esc(clip(c.productName, 34)) : "";
+  const counter = c.seq && c.total && c.total > 1 ? `COUPON ${c.seq} OF ${c.total}` : "";
   const date = c.issuedAt
     ? esc(new Date(c.issuedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }))
     : "";
@@ -94,15 +100,17 @@ export function couponSvg(c: CouponArt) {
     <text x="700" y="150" font-size="40" font-weight="600" fill="#e5e7eb">Win a</text>
     <text x="700" y="225" font-size="78" font-weight="800" fill="url(#gold)">THAR ROXX</text>
 
-    <text x="700" y="292" font-size="20" font-weight="500" fill="#94a3b8" letter-spacing="2">YOUR LUCKY COUPON CODE</text>
+    <text x="700" y="292" font-size="20" font-weight="500" fill="#94a3b8" letter-spacing="2">YOUR COUPON CODE</text>
+    ${counter ? `<text x="1160" y="292" font-size="18" font-weight="700" fill="#fbbf24" text-anchor="end" letter-spacing="1">${counter}</text>` : ""}
     <rect x="700" y="310" width="460" height="96" rx="16" fill="#fbbf24" fill-opacity="0.12" stroke="#fbbf24" stroke-width="3" stroke-dasharray="14 10"/>
     <text x="930" y="374" font-size="50" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="4">${code}</text>
 
+    ${product ? `<text x="700" y="530" font-size="19" font-weight="600" fill="#fbbf24">For: ${product}</text>` : ""}
     ${name ? `<text x="700" y="456" font-size="24" font-weight="600" fill="#f8fafc">${name}</text>` : ""}
     ${order || date ? `<text x="700" y="490" font-size="19" fill="#94a3b8">${[order && `Order ${order}`, date].filter(Boolean).join("  ·  ")}</text>` : ""}
 
     <text x="1160" y="92" font-size="26" font-weight="800" fill="#ffffff" text-anchor="end">${store}</text>
-    <text x="700" y="566" font-size="17" fill="#94a3b8">Keep this coupon safe. One entry per paid order.</text>
+    <text x="700" y="582" font-size="16" fill="#94a3b8">Keep this coupon safe. Each coupon is one entry in the draw.</text>
   </g>
 </svg>`;
 }

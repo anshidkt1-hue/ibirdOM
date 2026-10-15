@@ -140,16 +140,23 @@ export async function handlePaymentSuccess(paymentLinkId: string, paymentId: str
     .eq('id', wa.order_id)
     .single();
 
-  const couponCode = await generateGiveawayCoupon(order?.customer_id, wa.order_id);
+  const coupons = await issueGiveawayCoupons(wa.order_id);
+  const couponCode = coupons[0]?.coupon_code ?? null;
+
+  const couponText = !coupons.length
+    ? ''
+    : coupons.length === 1
+      ? `\n\n🎁 Your Thar ROXX giveaway coupon: *${coupons[0].coupon_code}*\nKeep this code safe. It is your entry in the Thar ROXX giveaway draw.`
+      : `\n\n🎁 You get *${coupons.length} Thar ROXX giveaway coupons*, one for each product:\n` +
+        coupons.map((c) => `${c.coupon_seq}. *${c.coupon_code}* · ${c.product_name ?? 'Product'}`).join('\n') +
+        `\nEach code is a separate entry in the Thar ROXX giveaway draw.`;
 
   try {
     await sendTextMessage(
       wa.phone_number,
       `✅ Payment received!\n\nOrder ${order?.order_number} (₹${order?.total}) is confirmed and our team will process it shortly.` +
-        (couponCode
-          ? `\n\n🎁 Your Thar ROXX giveaway coupon: *${couponCode}*\nKeep this code safe. It is your entry in the Thar ROXX giveaway draw.`
-          : '') +
-        `\n\nYour invoice${couponCode ? ' and coupon follow' : ' follows'} below.` +
+        couponText +
+        `\n\nYour invoice${coupons.length ? ` and coupon${coupons.length > 1 ? 's' : ''} follow` : ' follows'} below.` +
         `\n\nThank you for shopping with ${STORE_NAME}!`
     );
   } catch (err) {
@@ -164,45 +171,15 @@ export async function handlePaymentSuccess(paymentLinkId: string, paymentId: str
   return { success: true, alreadyProcessed: false, couponCode };
 }
 
-// Letters and digits that cannot be confused when read aloud or copied (no 0/O, 1/I/L).
-const COUPON_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-
-function randomCouponCode() {
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += COUPON_ALPHABET[crypto.randomInt(COUPON_ALPHABET.length)];
+// One Thar ROXX giveaway coupon per product unit in the order (an entry code, not a discount),
+// issued once by the database even when the payment callback and webhook arrive together
+async function issueGiveawayCoupons(orderId: string): Promise<GiveawayCoupon[]> {
+  const { data, error } = await supabase.rpc('issue_giveaway_coupons', { p_order_id: orderId });
+  if (error) {
+    console.error('❌ Giveaway coupons failed:', error.message);
+    return [];
   }
-  return `THAR-${code}`;
+  return (data || []) as GiveawayCoupon[];
 }
 
-// One Thar ROXX giveaway coupon per paid order. It is an entry code, not a discount.
-async function generateGiveawayCoupon(customerId: string | null | undefined, orderId: string) {
-  if (!customerId) return null;
-
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const couponCode = randomCouponCode();
-    const { error } = await supabase.from('coupons').insert({
-      customer_id: customerId,
-      order_id: orderId,
-      coupon_code: couponCode,
-      discount_percentage: 0,
-      campaign: 'thar-roxx-giveaway',
-    });
-
-    if (!error) return couponCode;
-    if (error.code === '23505') {
-      // Same order already has its coupon: return it. Otherwise the code clashed, so try another.
-      const { data: existing } = await supabase
-        .from('coupons')
-        .select('coupon_code')
-        .eq('order_id', orderId)
-        .eq('campaign', 'thar-roxx-giveaway')
-        .maybeSingle();
-      if (existing) return existing.coupon_code as string;
-      continue;
-    }
-    console.error('❌ Giveaway coupon insert failed:', error.message);
-    return null;
-  }
-  return null;
-}
+type GiveawayCoupon = { coupon_code: string; coupon_seq: number; product_name: string | null };

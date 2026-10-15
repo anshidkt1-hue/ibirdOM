@@ -344,17 +344,6 @@ export async function fetchOrder(id: string): Promise<{ order: Order; items: Ord
   return { order: data as Order, items: (items ?? []) as OrderItem[] };
 }
 
-export async function fetchOrderCoupon(orderId: string): Promise<string | null> {
-  const { data, error } = await db
-    .from("coupons")
-    .select("coupon_code")
-    .eq("order_id", orderId)
-    .eq("campaign", "thar-roxx-giveaway")
-    .maybeSingle();
-  if (error) throw error;
-  return (data?.coupon_code as string | undefined) ?? null;
-}
-
 export async function fetchOrderItems(): Promise<OrderItem[]> {
   return fetchAllRows<OrderItem>((from, to) =>
     db.from("order_items").select("*").order("id").range(from, to),

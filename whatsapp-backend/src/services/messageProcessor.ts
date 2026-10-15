@@ -21,10 +21,23 @@ async function getSession(phoneNumber: string) {
   return data;
 }
 
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const inr = (n: number) =>
+  `₹${n.toLocaleString('en-IN', { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`;
+
+// Same per-line GST rounding as createWhatsAppOrder, so the summary matches the payment amount
 function cartSummary(cart: CartItem[]) {
-  const lines = cart.map((i) => `• ${i.name} x${i.quantity} — ₹${i.price * i.quantity}`);
-  const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
-  return `🛒 *Your cart*\n${lines.join('\n')}\n\nSubtotal: ₹${subtotal}`;
+  const lines = cart.map((i) => {
+    const line = round2(i.price * i.quantity);
+    return `• ${i.name} × ${i.quantity} — ${inr(line)} (GST ${i.gst ?? 0}%)`;
+  });
+  const subtotal = round2(cart.reduce((s, i) => s + round2(i.price * i.quantity), 0));
+  const gst = round2(cart.reduce((s, i) => s + round2((round2(i.price * i.quantity) * (i.gst ?? 0)) / 100), 0));
+  const count = cart.reduce((s, i) => s + i.quantity, 0);
+  return (
+    `🛒 *Your cart* (${count} item${count === 1 ? '' : 's'})\n${lines.join('\n')}\n\n` +
+    `Subtotal: ${inr(subtotal)}\nGST: ${inr(gst)}\n*Total: ${inr(round2(subtotal + gst))}*`
+  );
 }
 
 // The name and address in form_data are kept between orders, so returning customers only confirm them
@@ -184,6 +197,7 @@ export async function processButtonReply(phoneNumber: string, buttonId: string) 
 
   if (buttonId === 'add_more') {
     await updateSession(phoneNumber, { session_state: 'catalog' });
+    await sendTextMessage(phoneNumber, 'Pick more products and send the cart again. They will be added to your current cart 👇');
     return sendProductList(phoneNumber);
   }
 
@@ -214,7 +228,7 @@ async function addToCart(phoneNumber: string, productId: string) {
 
   const { data: product } = await supabase
     .from('products')
-    .select('id, name, price, stock')
+    .select('id, name, variant, price, stock, gst')
     .eq('id', productId)
     .maybeSingle();
 
@@ -235,9 +249,10 @@ async function addToCart(phoneNumber: string, productId: string) {
   } else {
     cart.push({
       product_id: product.id,
-      name: product.name,
+      name: `${product.name}${product.variant ? ` ${product.variant}` : ''}`,
       price: Number(product.price),
       quantity: 1,
+      gst: Number(product.gst ?? 0),
     });
   }
 
@@ -255,32 +270,43 @@ function sendCartOptions(phoneNumber: string, cart: CartItem[], note = '') {
 
 type CatalogOrderItem = { product_retailer_id: string; quantity: number | string };
 
-// The cart sent from the WhatsApp catalog replaces the bot cart. Prices and stock come from
-// Inventory, never from the message, so a stale catalog price cannot be charged.
+// A cart sent from the WhatsApp catalog is added to what is already in the bot cart (Add more),
+// so items picked earlier are kept. Prices, GST and stock come from Inventory, never from the
+// message, so a stale catalog price cannot be charged.
 export async function processCatalogOrder(phoneNumber: string, items: CatalogOrderItem[], session: any) {
   console.log(`🧺 Catalog cart from ${phoneNumber}: ${JSON.stringify(items)}`);
   if (session?.session_state === 'processing') return;
 
-  const ids = [...new Set(items.map((i) => i.product_retailer_id))];
+  // After a finished or abandoned checkout the old cart is not reused
+  const keepExisting = ['catalog', 'confirm_details', 'ask_name', 'ask_address'].includes(session?.session_state);
+  const existing: CartItem[] = keepExisting ? session?.cart_items || [] : [];
+
+  const ids = [...new Set([...items.map((i) => i.product_retailer_id), ...existing.map((i) => i.product_id)])];
   const { data: products } = await supabase
     .from('products')
-    .select('id, name, variant, price, stock, active')
+    .select('id, name, variant, price, stock, active, gst')
     .in('id', ids);
   const byId = new Map((products || []).map((p: any) => [p.id, p]));
 
+  const wanted = new Map<string, number>();
+  for (const i of existing) wanted.set(i.product_id, (wanted.get(i.product_id) ?? 0) + i.quantity);
+  for (const i of items) {
+    const q = Math.max(1, Math.floor(Number(i.quantity) || 1));
+    wanted.set(i.product_retailer_id, (wanted.get(i.product_retailer_id) ?? 0) + q);
+  }
+
   const cart: CartItem[] = [];
   const notes: string[] = [];
-  for (const item of items) {
-    const p: any = byId.get(item.product_retailer_id);
+  for (const [id, want] of wanted) {
+    const p: any = byId.get(id);
     const label = p ? `${p.name}${p.variant ? ` ${p.variant}` : ''}` : 'An item';
     if (!p || !p.active || p.stock <= 0) {
       notes.push(`${label} is no longer available.`);
       continue;
     }
-    const wanted = Math.max(1, Math.floor(Number(item.quantity) || 1));
-    const quantity = Math.min(wanted, p.stock);
-    if (quantity < wanted) notes.push(`Only ${p.stock} of ${label} in stock.`);
-    cart.push({ product_id: p.id, name: label, price: Number(p.price), quantity });
+    const quantity = Math.min(want, p.stock);
+    if (quantity < want) notes.push(`Only ${p.stock} of ${label} in stock.`);
+    cart.push({ product_id: p.id, name: label, price: Number(p.price), quantity, gst: Number(p.gst ?? 0) });
   }
 
   await updateSession(phoneNumber, { cart_items: cart, session_state: 'catalog' });

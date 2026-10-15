@@ -7,6 +7,7 @@ export interface CartItem {
   name: string;
   price: number;
   quantity: number;
+  gst?: number; // % for the cart summary; the order itself re-reads GST from Inventory
 }
 
 export interface CustomerInput {

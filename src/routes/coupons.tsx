@@ -90,6 +90,9 @@ function CouponsPage() {
     customerName: c.customer_name,
     orderNumber: c.order_number,
     issuedAt: c.created_at,
+    productName: c.product_name,
+    seq: c.coupon_seq,
+    total: c.coupon_total,
     storeName,
     imageUrl,
   });
@@ -103,7 +106,7 @@ function CouponsPage() {
   };
 
   return (
-    <AppShell title="Coupons" subtitle="Thar ROXX giveaway coupons: one for every paid WhatsApp order.">
+    <AppShell title="Coupons" subtitle="Thar ROXX giveaway coupons: one for every product in a paid WhatsApp order.">
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Coupons issued" value={formatNumber(stats?.total ?? 0)} icon={Ticket} />
         <StatCard label="Issued today" value={formatNumber(stats?.today ?? 0)} icon={CalendarDays} tone="brand" />
@@ -126,6 +129,7 @@ function CouponsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Coupon</TableHead>
+                  <TableHead>Product</TableHead>
                   <TableHead>Customer</TableHead>
                   <TableHead>Order</TableHead>
                   <TableHead>Issued</TableHead>
@@ -137,6 +141,14 @@ function CouponsPage() {
                 {rows.map((c) => (
                   <TableRow key={c.id}>
                     <TableCell className="whitespace-nowrap font-mono text-sm font-bold">{c.coupon_code}</TableCell>
+                    <TableCell className="max-w-[12rem]">
+                      <p className="truncate">{c.product_name || "—"}</p>
+                      {c.coupon_total && c.coupon_total > 1 && (
+                        <p className="text-xs text-muted-foreground">
+                          Coupon {c.coupon_seq} of {c.coupon_total}
+                        </p>
+                      )}
+                    </TableCell>
                     <TableCell className="max-w-[12rem]">
                       <p className="truncate font-medium">{c.customer_name || "—"}</p>
                       {c.customer_phone && <p className="text-xs text-muted-foreground">{c.customer_phone}</p>}
@@ -170,8 +182,8 @@ function CouponsPage() {
                 ))}
                 {!rows.length && (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
-                      {isLoading ? "Loading coupons…" : "No coupons yet. A coupon is issued when a WhatsApp order is paid."}
+                    <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
+                      {isLoading ? "Loading coupons…" : "No coupons yet. Coupons are issued when a WhatsApp order is paid, one per product."}
                     </TableCell>
                   </TableRow>
                 )}

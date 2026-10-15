@@ -9,6 +9,7 @@ import {
   type InvoiceSeller,
 } from "@/lib/invoice-pdf";
 import { couponSvg, COUPON_HEIGHT, COUPON_WIDTH } from "@/lib/coupon-design";
+import { buildCouponsPdf, couponsFileName } from "@/lib/coupon-pdf";
 
 const db = supabase as unknown as { from: (table: string) => any; rpc: (fn: string, args: object) => any };
 
@@ -167,6 +168,9 @@ export type Coupon = {
   created_at: string;
   image_url: string | null;
   sent_at: string | null;
+  product_name?: string | null | undefined;
+  coupon_seq?: number | null | undefined;
+  coupon_total?: number | null | undefined;
   order_number?: string | undefined;
   customer_name?: string | null | undefined;
   customer_phone?: string | null | undefined;
@@ -237,14 +241,29 @@ export type CouponArtInput = {
   issuedAt?: string | null | undefined;
   storeName?: string | null | undefined;
   imageUrl?: string | null | undefined;
+  productName?: string | null | undefined;
+  seq?: number | null | undefined;
+  total?: number | null | undefined;
 };
+
+// All coupons of one order, in their order (1 of N)
+export async function fetchOrderCoupons(orderId: string): Promise<Coupon[]> {
+  const { data, error } = await db
+    .from("coupons")
+    .select("*")
+    .eq("order_id", orderId)
+    .eq("campaign", "thar-roxx-giveaway")
+    .order("coupon_seq", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as Coupon[];
+}
 
 // The image is inlined so the SVG renders on a canvas (and as an <img>) without CORS issues
 export async function couponSvgFor(c: CouponArtInput) {
   return couponSvg({ ...c, imageHref: c.imageUrl ? await toDataUri(c.imageUrl) : null });
 }
 
-export async function downloadCouponPng(c: CouponArtInput) {
+async function couponCanvas(c: CouponArtInput) {
   const svg = await couponSvgFor(c);
   const img = new Image();
   img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
@@ -253,6 +272,31 @@ export async function downloadCouponPng(c: CouponArtInput) {
   canvas.width = COUPON_WIDTH;
   canvas.height = COUPON_HEIGHT;
   canvas.getContext("2d")!.drawImage(img, 0, 0);
+  return canvas;
+}
+
+// Every coupon of an order in one PDF (the same file the customer gets on WhatsApp)
+export async function downloadCouponsPdf(arts: CouponArtInput[], orderNumber: string) {
+  const entries = [];
+  for (const art of arts) {
+    entries.push({
+      png: (await couponCanvas(art)).toDataURL("image/png"),
+      code: art.code,
+      seq: art.seq,
+      productName: art.productName,
+    });
+  }
+  const first = arts[0];
+  buildCouponsPdf(entries, {
+    orderNumber,
+    customerName: first?.customerName,
+    storeName: first?.storeName,
+    issuedAt: first?.issuedAt,
+  }).save(couponsFileName(orderNumber));
+}
+
+export async function downloadCouponPng(c: CouponArtInput) {
+  const canvas = await couponCanvas(c);
   const blob: Blob = await new Promise((resolve, reject) =>
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not create the image"))), "image/png"),
   );
