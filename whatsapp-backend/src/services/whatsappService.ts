@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { supabase } from '../server';
+import { CATALOG_ID, syncCatalogIfStale } from './catalogService';
 
 const WHATSAPP_API_URL = `https://graph.facebook.com/v21.0`;
 const PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -100,6 +101,31 @@ export async function sendTextMessage(phoneNumber: string, text: string) {
 
 export const STORE_NAME = process.env.STORE_NAME || 'ibird';
 
+// Media by public link: a PDF document (shown with its file name) or an image with a caption
+export async function sendDocument(phoneNumber: string, link: string, filename: string, caption?: string) {
+  const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`;
+  await postWithRetry(url, {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: phoneNumber,
+    type: 'document',
+    document: { link, filename, ...(caption ? { caption: caption.slice(0, 1024) } : {}) },
+  });
+  console.log(`✅ Document ${filename} sent to ${phoneNumber}`);
+}
+
+export async function sendImage(phoneNumber: string, link: string, caption?: string) {
+  const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`;
+  await postWithRetry(url, {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: phoneNumber,
+    type: 'image',
+    image: { link, ...(caption ? { caption: caption.slice(0, 1024) } : {}) },
+  });
+  console.log(`✅ Image sent to ${phoneNumber}`);
+}
+
 export async function sendButtons(
   phoneNumber: string,
   bodyText: string,
@@ -137,8 +163,8 @@ export async function sendButtons(
   }
 }
 
-const CATALOG_FIELDS = 'id, name, variant, price, stock, gst, image_url';
-const CATALOG_LIMIT = 10;
+const CATALOG_FIELDS = 'id, name, variant, price, stock, gst, image_url, active';
+const CATALOG_LIMIT = 30;
 
 // Only products marked "WhatsApp / online" in Inventory are offered here, read live on every request.
 async function fetchOnlineProducts() {
@@ -154,9 +180,43 @@ async function fetchOnlineProducts() {
   return data || [];
 }
 
-// WhatsApp list messages cannot show pictures, so each product is sent as its own card:
-// photo on top, name / price / GST in the body, and an "Add to cart" button.
+function priceLine(p: any) {
+  return `₹${p.price} + ${Number(p.gst ?? 0)}% GST`;
+}
+
+const CATALOG_MAX_ITEMS = 30;
+
+// One catalog message: every product with its photo, price and an Add button; the customer
+// builds the cart in WhatsApp and sends it, which arrives as an "order" message.
+async function sendCatalogList(phoneNumber: string, products: any[]) {
+  const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`;
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: phoneNumber,
+    type: 'interactive',
+    interactive: {
+      type: 'product_list',
+      header: { type: 'text', text: `${STORE_NAME} products` },
+      body: { text: '🛍️ Tap a product to see its photo, then *Add* it to your cart. When you are done, open the cart and tap *Send*.' },
+      footer: { text: 'Prices + GST' },
+      action: {
+        catalog_id: CATALOG_ID,
+        sections: [
+          {
+            title: 'Products',
+            product_items: products.slice(0, CATALOG_MAX_ITEMS).map((p) => ({ product_retailer_id: p.id })),
+          },
+        ],
+      },
+    },
+  };
+  await postWithRetry(url, payload);
+  console.log(`✅ Catalog list sent to ${phoneNumber} (${Math.min(products.length, CATALOG_MAX_ITEMS)})`);
+}
+
 export async function sendProductList(phoneNumber: string) {
+  syncCatalogIfStale();
   const products = await fetchOnlineProducts();
 
   if (products.length === 0) {
@@ -164,22 +224,89 @@ export async function sendProductList(phoneNumber: string) {
     return;
   }
 
-  await sendTextMessage(phoneNumber, '🛍️ Here are our products. Tap *Add to cart* under the ones you want.');
-
-  for (const p of products as any[]) {
-    const body =
-      `*${p.name}*${p.variant ? ` (${p.variant})` : ''}\n` +
-      `₹${p.price}  +  ${Number(p.gst ?? 0)}% GST\n` +
-      `In stock: ${p.stock}`;
-    const buttons = [{ id: `add:${p.id}`, title: '🛒 Add to cart' }];
+  const inCatalog = (products as any[]).filter((p) => /\.(jpe?g|png)(\?|$)/i.test(p.image_url || ''));
+  if (CATALOG_ID && inCatalog.length) {
     try {
-      await sendButtons(phoneNumber, body, buttons, p.image_url || null);
-    } catch {
-      if (!p.image_url) throw new Error(`Could not send product ${p.id}`);
-      // A broken or private image link must not hide the product
-      await sendButtons(phoneNumber, body, buttons, null);
+      return await sendCatalogList(phoneNumber, inCatalog);
+    } catch (error: any) {
+      // e.g. a product still in Meta review: fall back to the plain list so ordering never stops
+      console.error('❌ Catalog list failed, sending plain list:', error.response?.data || error.message);
     }
   }
 
-  console.log(`✅ Product cards sent to ${phoneNumber} (${products.length})`);
+  return sendPlainProductList(phoneNumber, products);
+}
+
+// Fallback list message. WhatsApp list rows cannot carry images,
+// so the photo is shown when the customer taps a product (see sendProductCard).
+async function sendPlainProductList(phoneNumber: string, products: any[]) {
+  const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`;
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: phoneNumber,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: '🛍️ Tap *View products* and choose an item to see its photo and add it to your cart.' },
+      footer: { text: STORE_NAME },
+      action: {
+        button: 'View products',
+        sections: [
+          {
+            title: 'Products',
+            // WhatsApp list messages allow at most 10 rows
+            rows: products.slice(0, 10).map((p) => ({
+              id: p.id,
+              title: `${p.name}${p.variant ? ` ${p.variant}` : ''}`.slice(0, 24),
+              description: `${priceLine(p)} · In stock ${p.stock}`.slice(0, 72),
+            })),
+          },
+        ],
+      },
+    },
+  };
+
+  try {
+    await postWithRetry(url, payload);
+    console.log(`✅ Product list sent to ${phoneNumber} (${products.length})`);
+  } catch (error: any) {
+    console.error('❌ Failed to send product list:', error.response?.data);
+    throw error;
+  }
+}
+
+// The chosen product with its photo, price and GST, plus Add to cart / Back to list.
+export async function sendProductCard(phoneNumber: string, productId: string) {
+  const { data } = await supabase.from('products').select(CATALOG_FIELDS).eq('id', productId).maybeSingle();
+  const product = data as any;
+
+  if (!product || !product.active || product.stock <= 0) {
+    await sendTextMessage(phoneNumber, 'Sorry, that product is no longer available.');
+    return sendProductList(phoneNumber);
+  }
+
+  const body =
+    `*${product.name}*${product.variant ? ` (${product.variant})` : ''}\n` +
+    `${priceLine(product)}\n` +
+    `In stock: ${product.stock}`;
+  const buttons = [
+    { id: `add:${product.id}`, title: '🛒 Add to cart' },
+    { id: 'view_products', title: '⬅️ Back to list' },
+  ];
+
+  // WhatsApp accepts AVIF/WebP links but then silently fails to deliver the message,
+  // so only JPEG/PNG photos are attached; anything else is sent without a photo.
+  const image = /\.(jpe?g|png)(\?|$)/i.test(product.image_url || '') ? product.image_url : null;
+  if (product.image_url && !image) {
+    console.warn(`⚠️ Unsupported photo format for ${product.name}; re-upload it in Inventory as JPEG/PNG`);
+  }
+
+  try {
+    await sendButtons(phoneNumber, body, buttons, image);
+  } catch (error) {
+    if (!image) throw error;
+    // A broken or private image link must not block the order
+    await sendButtons(phoneNumber, body, buttons, null);
+  }
 }

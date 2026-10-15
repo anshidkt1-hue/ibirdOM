@@ -1,5 +1,5 @@
 import { supabase } from '../server';
-import { sendButtons, sendProductList, sendTextMessage, STORE_NAME } from './whatsappService';
+import { sendButtons, sendProductCard, sendProductList, sendTextMessage, STORE_NAME } from './whatsappService';
 import { createWhatsAppOrder, CartItem } from './orderService';
 
 const RESET_WORDS = ['hi', 'hello', 'hey', 'menu', 'start', 'restart', 'cancel', 'order'];
@@ -27,8 +27,9 @@ function cartSummary(cart: CartItem[]) {
   return `🛒 *Your cart*\n${lines.join('\n')}\n\nSubtotal: ₹${subtotal}`;
 }
 
+// The name and address in form_data are kept between orders, so returning customers only confirm them
 export async function sendWelcome(phoneNumber: string) {
-  await updateSession(phoneNumber, { session_state: 'welcome', cart_items: [], form_data: {} });
+  await updateSession(phoneNumber, { session_state: 'welcome', cart_items: [] });
   await sendButtons(
     phoneNumber,
     `👋 Welcome to *${STORE_NAME}*!\n\nBrowse our products and place your order right here on WhatsApp.`,
@@ -36,12 +37,39 @@ export async function sendWelcome(phoneNumber: string) {
   );
 }
 
+// Products first; the name and address are collected at checkout, just before payment
 async function startOrder(phoneNumber: string) {
-  await updateSession(phoneNumber, { session_state: 'ask_name', cart_items: [], form_data: {} });
-  await sendTextMessage(phoneNumber, "Great! Let's get your order started.\n\nWhat's your *name*?");
+  await updateSession(phoneNumber, { session_state: 'catalog', cart_items: [] });
+  await sendProductList(phoneNumber);
 }
 
-async function checkout(phoneNumber: string) {
+// Checkout: ask for the details that are missing, or let a returning customer confirm the saved ones
+async function beginCheckout(phoneNumber: string) {
+  const session = await getSession(phoneNumber);
+  const cart: CartItem[] = session?.cart_items || [];
+  if (session?.session_state === 'processing') return;
+
+  if (cart.length === 0) {
+    await updateSession(phoneNumber, { session_state: 'catalog' });
+    await sendTextMessage(phoneNumber, 'Your cart is empty. Pick a product first 👇');
+    return sendProductList(phoneNumber);
+  }
+
+  const form = session?.form_data || {};
+  if (form.name && form.address) {
+    await updateSession(phoneNumber, { session_state: 'confirm_details' });
+    return sendButtons(phoneNumber, `${cartSummary(cart)}\n\n📦 *Deliver to*\n${form.name}\n${form.address}`, [
+      { id: 'confirm_details', title: '✅ Confirm & pay' },
+      { id: 'change_details', title: '✏️ Change details' },
+      { id: 'add_more', title: '➕ Add more' },
+    ]);
+  }
+
+  await updateSession(phoneNumber, { session_state: 'ask_name' });
+  return sendTextMessage(phoneNumber, `${cartSummary(cart)}\n\nAlmost done! What's your *name*?`);
+}
+
+async function placeOrder(phoneNumber: string) {
   const session = await getSession(phoneNumber);
   const cart: CartItem[] = session?.cart_items || [];
 
@@ -50,6 +78,7 @@ async function checkout(phoneNumber: string) {
     await sendProductList(phoneNumber);
     return;
   }
+  if (!session?.form_data?.name || !session?.form_data?.address) return beginCheckout(phoneNumber);
 
   // Atomic claim: a double-tap on Checkout must not create two orders.
   const { data: claimed } = await supabase
@@ -99,20 +128,28 @@ export async function processCustomerMessage(phoneNumber: string, messageText: s
   if (state === 'processing') return;
 
   if (state === 'ask_name') {
-    const form = { ...(session.form_data || {}), name: raw.slice(0, 80) };
+    const form = { ...(session.form_data || {}), name: raw.slice(0, 80), address: undefined };
     await updateSession(phoneNumber, { form_data: form, session_state: 'ask_address' });
     return sendTextMessage(phoneNumber, `Thanks ${form.name}! 🏠 Please send your *delivery address*.`);
   }
 
   if (state === 'ask_address') {
     const form = { ...(session.form_data || {}), address: raw.slice(0, 300) };
-    await updateSession(phoneNumber, { form_data: form, session_state: 'catalog' });
-    return sendProductList(phoneNumber);
+    await updateSession(phoneNumber, { form_data: form });
+    // Details complete: create the order and send the payment link
+    return placeOrder(phoneNumber);
+  }
+
+  if (state === 'confirm_details') {
+    return sendButtons(phoneNumber, 'Please confirm your delivery details:', [
+      { id: 'confirm_details', title: '✅ Confirm & pay' },
+      { id: 'change_details', title: '✏️ Change details' },
+    ]);
   }
 
   if (state === 'catalog') {
-    if (text.includes('checkout') || text.includes('pay')) return checkout(phoneNumber);
-    return sendButtons(phoneNumber, 'Tap *Add to cart* under any product above, or choose:', [
+    if (text.includes('checkout') || text.includes('pay')) return beginCheckout(phoneNumber);
+    return sendButtons(phoneNumber, 'Choose a product from the list, or:', [
       { id: 'view_products', title: '🛍️ View products' },
       { id: 'checkout', title: '✅ Checkout' },
     ]);
@@ -141,7 +178,7 @@ export async function processButtonReply(phoneNumber: string, buttonId: string) 
 
   if (buttonId === 'start_order') return startOrder(phoneNumber);
 
-  if (buttonId.startsWith('add:')) return processListSelection(phoneNumber, buttonId.slice(4));
+  if (buttonId.startsWith('add:')) return addToCart(phoneNumber, buttonId.slice(4));
 
   if (buttonId === 'view_products') return sendProductList(phoneNumber);
 
@@ -150,7 +187,14 @@ export async function processButtonReply(phoneNumber: string, buttonId: string) 
     return sendProductList(phoneNumber);
   }
 
-  if (buttonId === 'checkout') return checkout(phoneNumber);
+  if (buttonId === 'checkout') return beginCheckout(phoneNumber);
+
+  if (buttonId === 'confirm_details') return placeOrder(phoneNumber);
+
+  if (buttonId === 'change_details') {
+    await updateSession(phoneNumber, { session_state: 'ask_name', form_data: {} });
+    return sendTextMessage(phoneNumber, "No problem. What's your *name*?");
+  }
 
   if (buttonId === 'clear_cart') {
     await updateSession(phoneNumber, { cart_items: [], session_state: 'catalog' });
@@ -159,8 +203,14 @@ export async function processButtonReply(phoneNumber: string, buttonId: string) 
   }
 }
 
+// Tapping a product in the list shows its photo card; adding happens from the card's button.
 export async function processListSelection(phoneNumber: string, productId: string) {
-  console.log(`🛒 Product selected - ${phoneNumber}: ${productId}`);
+  console.log(`👀 Product opened - ${phoneNumber}: ${productId}`);
+  return sendProductCard(phoneNumber, productId);
+}
+
+async function addToCart(phoneNumber: string, productId: string) {
+  console.log(`🛒 Add to cart - ${phoneNumber}: ${productId}`);
 
   const { data: product } = await supabase
     .from('products')
@@ -192,10 +242,53 @@ export async function processListSelection(phoneNumber: string, productId: strin
   }
 
   await updateSession(phoneNumber, { cart_items: cart, session_state: 'catalog' });
+  await sendCartOptions(phoneNumber, cart);
+}
 
-  await sendButtons(phoneNumber, `${cartSummary(cart)}\n\nWhat next?`, [
+function sendCartOptions(phoneNumber: string, cart: CartItem[], note = '') {
+  return sendButtons(phoneNumber, `${note}${cartSummary(cart)}\n\nWhat next?`, [
     { id: 'add_more', title: '➕ Add more' },
     { id: 'checkout', title: '✅ Checkout' },
     { id: 'clear_cart', title: '🗑️ Clear cart' },
   ]);
+}
+
+type CatalogOrderItem = { product_retailer_id: string; quantity: number | string };
+
+// The cart sent from the WhatsApp catalog replaces the bot cart. Prices and stock come from
+// Inventory, never from the message, so a stale catalog price cannot be charged.
+export async function processCatalogOrder(phoneNumber: string, items: CatalogOrderItem[], session: any) {
+  console.log(`🧺 Catalog cart from ${phoneNumber}: ${JSON.stringify(items)}`);
+  if (session?.session_state === 'processing') return;
+
+  const ids = [...new Set(items.map((i) => i.product_retailer_id))];
+  const { data: products } = await supabase
+    .from('products')
+    .select('id, name, variant, price, stock, active')
+    .in('id', ids);
+  const byId = new Map((products || []).map((p: any) => [p.id, p]));
+
+  const cart: CartItem[] = [];
+  const notes: string[] = [];
+  for (const item of items) {
+    const p: any = byId.get(item.product_retailer_id);
+    const label = p ? `${p.name}${p.variant ? ` ${p.variant}` : ''}` : 'An item';
+    if (!p || !p.active || p.stock <= 0) {
+      notes.push(`${label} is no longer available.`);
+      continue;
+    }
+    const wanted = Math.max(1, Math.floor(Number(item.quantity) || 1));
+    const quantity = Math.min(wanted, p.stock);
+    if (quantity < wanted) notes.push(`Only ${p.stock} of ${label} in stock.`);
+    cart.push({ product_id: p.id, name: label, price: Number(p.price), quantity });
+  }
+
+  await updateSession(phoneNumber, { cart_items: cart, session_state: 'catalog' });
+
+  const note = notes.length ? `⚠️ ${notes.join('\n⚠️ ')}\n\n` : '';
+  if (!cart.length) {
+    await sendTextMessage(phoneNumber, `${note}Your cart is empty. Pick a product 👇`);
+    return sendProductList(phoneNumber);
+  }
+  return sendCartOptions(phoneNumber, cart, note);
 }

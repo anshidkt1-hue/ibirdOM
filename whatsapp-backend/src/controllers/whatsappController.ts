@@ -4,6 +4,7 @@ import {
   processCustomerMessage,
   processButtonReply,
   processListSelection,
+  processCatalogOrder,
 } from '../services/messageProcessor';
 
 export async function verifyWebhookToken(req: Request, res: Response) {
@@ -93,6 +94,8 @@ async function handleMessage(message: any) {
     }
   } else if (message.type === 'button') {
     await processButtonReply(phoneNumber, message.button.payload);
+  } else if (message.type === 'order') {
+    await processCatalogOrder(phoneNumber, message.order?.product_items || [], session);
   }
 }
 

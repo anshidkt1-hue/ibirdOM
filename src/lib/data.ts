@@ -647,6 +647,20 @@ async function deductOrderStock(
   }
 }
 
+// Scanned code → active counter product, matched on barcode first, then SKU.
+export async function findCounterProductByCode(code: string): Promise<Product | null> {
+  const value = code.trim();
+  if (!value || /[,()"]/.test(value)) return null;
+  const { data, error } = await db
+    .from("products")
+    .select("*")
+    .eq("active", true)
+    .or(`barcode.eq.${value},sku.eq.${value}`);
+  if (error) throw error;
+  const matches = ((data ?? []) as Product[]).filter((p) => channelOf(p) === "counter");
+  return matches.find((p) => p.barcode === value) ?? matches[0] ?? null;
+}
+
 // Counter and online stock are separate, so the copy starts at zero stock with its own SKU.
 export async function copyProductToChannel(product: Product, channel: SalesChannel): Promise<Product> {
   const suffix = channel === "online" ? "W" : "C";
@@ -722,17 +736,44 @@ export async function deleteProduct(id: string) {
 }
 
 // Image upload function
+// WhatsApp only shows JPEG/PNG product photos (max 5 MB), so every upload is
+// converted to a JPEG of at most 1200 px; AVIF/WebP/HEIC photos would otherwise never arrive.
+async function toWhatsAppJpeg(file: File): Promise<Blob> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, 1200 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#ffffff"; // transparent PNG areas become white instead of black
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Image conversion failed"))), "image/jpeg", 0.85),
+  );
+}
+
 export async function uploadProductImage(file: File, productId: string): Promise<string> {
   try {
     console.log("Starting image upload for product:", productId, "File:", file.name);
 
+    let body: Blob = file;
+    let ext = file.name.split(".").pop() || "jpg";
+    try {
+      body = await toWhatsAppJpeg(file);
+      ext = "jpg";
+    } catch (conversionError) {
+      console.warn("Could not convert image, uploading original:", conversionError);
+    }
+
     const timestamp = Date.now();
-    const filename = `product-${productId}-${timestamp}.${file.name.split('.').pop()}`;
+    const filename = `product-${productId}-${timestamp}.${ext}`;
     console.log("Generated filename:", filename);
 
     const { data, error } = await supabase.storage
       .from("product-images")
-      .upload(filename, file, { upsert: true });
+      .upload(filename, body, { upsert: true, contentType: ext === "jpg" ? "image/jpeg" : file.type });
 
     if (error) {
       console.error("Image upload error:", error);
@@ -778,6 +819,7 @@ export type Settings = {
   enable_low_stock_alerts?: boolean;
   whatsapp_api_key?: string;
   discount_type?: string;
+  giveaway_image_url?: string | null;
   created_at?: string;
   updated_at?: string;
 };

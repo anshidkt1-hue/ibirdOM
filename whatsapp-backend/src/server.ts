@@ -8,6 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 import whatsappRoutes from './routes/whatsapp.routes';
 import ordersRoutes from './routes/orders.routes';
 import paymentsRoutes from './routes/payments.routes';
+import { startCatalogSync } from './services/catalogService';
 
 dotenv.config();
 
@@ -84,6 +85,7 @@ app.use((req: Request, res: Response) => {
 // ============================================
 
 app.listen(PORT, () => {
+  startCatalogSync();
   console.log(`
 ╔════════════════════════════════════════╗
 ║  🚀 WhatsApp Backend Server Started   ║

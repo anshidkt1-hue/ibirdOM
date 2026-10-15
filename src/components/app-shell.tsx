@@ -4,6 +4,7 @@ import {
   Boxes,
   ChevronLeft,
   FileBarChart,
+  FileText,
   LayoutGrid,
   LogOut,
   Menu,
@@ -13,6 +14,7 @@ import {
   Settings as SettingsIcon,
   ShoppingCart,
   Sun,
+  Ticket,
   Users,
   UserSquare2,
 } from "lucide-react";
@@ -33,11 +35,14 @@ import { cn } from "@/lib/utils";
 import { ROLE_LABELS, useRole, type Role } from "@/components/role-provider";
 import { useNotifications } from "@/hooks/use-notifications";
 import { logout } from "@/lib/auth";
+import { GlobalBarcodeScanner } from "@/components/global-barcode-scanner";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutGrid },
   { to: "/pos", label: "Counter Sale", icon: ShoppingCart },
   { to: "/orders", label: "Orders", icon: Receipt },
+  { to: "/invoices", label: "Invoices", icon: FileText },
+  { to: "/coupons", label: "Coupons", icon: Ticket },
   { to: "/customers", label: "Customers", icon: Users },
   { to: "/inventory", label: "Inventory", icon: Boxes },
   { to: "/employees", label: "Employees", icon: UserSquare2 },
@@ -95,6 +100,7 @@ export function AppShell({
 
   return (
     <div className="flex min-h-screen bg-background">
+      <GlobalBarcodeScanner />
       <aside
         className={cn(
           "fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-sidebar-border bg-sidebar transition-transform lg:translate-x-0",
@@ -221,21 +227,26 @@ export function AppShell({
 
       <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
         <header className="no-print sticky top-0 z-20 border-b border-border bg-card/90 backdrop-blur">
-          <div className="flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-6 sm:py-4">
             <Button
               variant="ghost"
               size="icon"
-              className="lg:hidden"
+              className="shrink-0 lg:hidden"
               onClick={() => setMobileOpen(true)}
             >
               <Menu className="size-5" />
             </Button>
             <div className="min-w-0 flex-1">
-              <h1 className="truncate text-2xl font-extrabold tracking-tight">{title}</h1>
-              {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
+              <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-2xl">{title}</h1>
+              {subtitle && <p className="line-clamp-2 text-sm text-muted-foreground">{subtitle}</p>}
             </div>
-            <div className="flex items-center gap-2">
-              {actions}
+            {/* Phones: page buttons drop to their own full-width row instead of squeezing the title */}
+            {actions && (
+              <div className="order-last flex w-full flex-wrap items-center gap-2 sm:order-none sm:w-auto sm:justify-end [&>div]:flex-wrap">
+                {actions}
+              </div>
+            )}
+            <div className="flex shrink-0 items-center gap-2">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="icon" className="relative">
@@ -247,7 +258,7 @@ export function AppShell({
                     )}
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-80">
+                <DropdownMenuContent align="end" className="w-[min(20rem,calc(100vw-2rem))]">
                   <DropdownMenuLabel>Notifications</DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   {notifications.length === 0 && (

@@ -136,8 +136,16 @@ const OrderRow = memo(function OrderRow({
           aria-label={`Select order ${order.order_number}`}
         />
       </TableCell>
-      <TableCell className="font-semibold">{order.order_number}</TableCell>
-      <TableCell>{order.customer_name}</TableCell>
+      <TableCell className="whitespace-nowrap font-semibold">
+        <Link
+          to="/orders/$orderId"
+          params={{ orderId: order.id }}
+          className="text-primary underline-offset-4 hover:underline"
+        >
+          {order.order_number}
+        </Link>
+      </TableCell>
+      <TableCell className="max-w-[12rem] truncate">{order.customer_name}</TableCell>
       <TableCell>
         <StatusBadge value={order.source} />
       </TableCell>

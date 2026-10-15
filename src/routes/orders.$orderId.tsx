@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Printer, Clock, User } from "lucide-react";
+import { useState } from "react";
+import { ArrowLeft, Printer, Clock, User, Download, FileText, Ticket } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
 import { StatusBadge } from "@/components/status-badge";
@@ -13,7 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { fetchOrder, fetchOrderCoupon, updateOrderStatus, fetchOrderStatusHistory, fetchOrderAssignmentHistory, fetchEmployees, recordStatusChange, recordAssignmentChange, type OrderStatusHistory, type OrderAssignmentHistory, type Employee } from "@/lib/data";
+import { couponSvgFor, downloadCouponPng, downloadInvoicePdf, ensureInvoice, fetchOrderInvoice } from "@/lib/documents";
+import { fetchSettings, fetchOrder, fetchOrderCoupon,updateOrderStatus, fetchOrderStatusHistory, fetchOrderAssignmentHistory, fetchEmployees, recordStatusChange, recordAssignmentChange, type OrderStatusHistory, type OrderAssignmentHistory, type Employee } from "@/lib/data";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { useRole } from "@/components/role-provider";
 
@@ -140,7 +142,7 @@ function OrderDetail() {
           <div className="mt-4 space-y-2 border-t border-border pt-4 text-sm">
             <Row label="Subtotal" value={formatCurrency(order.subtotal)} />
             <Row label="Discount" value={`- ${formatCurrency(order.discount)}`} />
-            <Row label="Tax (5%)" value={formatCurrency(order.tax)} />
+            <Row label="GST (per product)" value={formatCurrency(order.tax)} />
             {Number(order.refund_amount) > 0 && (
               <Row label="Refunded" value={`- ${formatCurrency(order.refund_amount)}`} />
             )}
@@ -233,6 +235,16 @@ function OrderDetail() {
         </div>
 
         <div className="space-y-4">
+          <InvoiceCard orderId={orderId} paid={order.payment_status === "paid" || order.payment_status === "refunded"} />
+
+          {giveawayCoupon && (
+            <CouponCard
+              code={giveawayCoupon}
+              customerName={order.customer_name}
+              orderNumber={order.order_number}
+            />
+          )}
+
           <div className="card-surface p-5">
             <h2 className="text-lg font-bold">Customer details</h2>
             <p className="mt-2 font-semibold">{order.customer_name}</p>
@@ -249,13 +261,6 @@ function OrderDetail() {
               <div className="mt-3">
                 <p className="text-xs font-semibold uppercase text-muted-foreground">Delivery address</p>
                 <p className="mt-1 text-sm">{order.delivery_address}</p>
-              </div>
-            )}
-
-            {giveawayCoupon && (
-              <div className="mt-3">
-                <p className="text-xs font-semibold uppercase text-muted-foreground">Thar ROXX giveaway coupon</p>
-                <p className="mt-1 font-mono text-sm font-semibold">{giveawayCoupon}</p>
               </div>
             )}
 
@@ -363,6 +368,102 @@ function OrderDetail() {
         </div>
       </div>
     </AppShell>
+  );
+}
+
+function InvoiceCard({ orderId, paid }: { orderId: string; paid: boolean }) {
+  const queryClient = useQueryClient();
+  const { can } = useRole();
+  const [busy, setBusy] = useState(false);
+  const { data: invoice, isLoading } = useQuery({
+    queryKey: ["order-invoice", orderId],
+    queryFn: () => fetchOrderInvoice(orderId),
+  });
+
+  const download = async () => {
+    setBusy(true);
+    try {
+      // Paid before invoicing was set up: create its invoice first
+      const inv = invoice ?? (await ensureInvoice(orderId));
+      if (!invoice) {
+        queryClient.invalidateQueries({ queryKey: ["order-invoice", orderId] });
+        queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      }
+      await downloadInvoicePdf(inv);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not create the invoice");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card-surface p-5">
+      <h2 className="flex items-center gap-2 text-lg font-bold">
+        <FileText className="size-5" /> Invoice
+      </h2>
+      {isLoading ? (
+        <p className="mt-2 text-sm text-muted-foreground">Loading…</p>
+      ) : invoice ? (
+        <>
+          <p className="mt-2 font-mono text-sm font-semibold">{invoice.invoice_number}</p>
+          <p className="text-xs text-muted-foreground">
+            Issued {formatDateTime(invoice.issued_at)}
+            {invoice.sent_at ? " · sent on WhatsApp" : ""}
+          </p>
+          <Button className="mt-3 w-full gap-2" disabled={busy} onClick={download}>
+            <Download className="size-4" /> {busy ? "Preparing PDF…" : "Download invoice PDF"}
+          </Button>
+        </>
+      ) : paid ? (
+        <>
+          <p className="mt-2 text-sm text-muted-foreground">This order was paid before invoicing was set up.</p>
+          {can("edit") && (
+            <Button className="mt-3 w-full gap-2" disabled={busy} onClick={download}>
+              <Download className="size-4" /> {busy ? "Creating…" : "Create & download invoice"}
+            </Button>
+          )}
+        </>
+      ) : (
+        <p className="mt-2 text-sm text-muted-foreground">The invoice is created automatically when the order is paid.</p>
+      )}
+    </div>
+  );
+}
+
+function CouponCard({ code, customerName, orderNumber }: { code: string; customerName: string; orderNumber: string }) {
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => fetchSettings().catch(() => ({}) as Awaited<ReturnType<typeof fetchSettings>>),
+  });
+  const art = {
+    code,
+    customerName,
+    orderNumber,
+    storeName: settings?.company_name || "ibird",
+    imageUrl: settings?.giveaway_image_url ?? null,
+  };
+  const { data: svg } = useQuery({ queryKey: ["coupon-svg", art], queryFn: () => couponSvgFor(art), staleTime: Infinity });
+
+  return (
+    <div className="card-surface p-5">
+      <h2 className="flex items-center gap-2 text-lg font-bold">
+        <Ticket className="size-5" /> Thar ROXX coupon
+      </h2>
+      <p className="mt-2 font-mono text-sm font-bold">{code}</p>
+      <div className="mt-3 aspect-[1200/630] w-full overflow-hidden rounded-lg bg-secondary">
+        {svg && (
+          <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`} alt={`Coupon ${code}`} className="size-full" />
+        )}
+      </div>
+      <Button
+        variant="outline"
+        className="mt-3 w-full gap-2"
+        onClick={() => downloadCouponPng(art).catch((e: Error) => toast.error(e.message))}
+      >
+        <Download className="size-4" /> Download coupon image
+      </Button>
+    </div>
   );
 }
 

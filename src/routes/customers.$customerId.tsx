@@ -158,7 +158,15 @@ function CustomerDetail() {
               <TableBody>
                 {customerOrders.map((order) => (
                   <TableRow key={order.id}>
-                    <TableCell className="font-semibold">{order.order_number}</TableCell>
+                    <TableCell className="whitespace-nowrap font-semibold">
+                      <Link
+                        to="/orders/$orderId"
+                        params={{ orderId: order.id }}
+                        className="text-primary underline-offset-4 hover:underline"
+                      >
+                        {order.order_number}
+                      </Link>
+                    </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{formatDate(order.created_at)}</TableCell>
                     <TableCell>
                       <StatusBadge value={order.status} />

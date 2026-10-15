@@ -443,10 +443,10 @@ function InventoryPage() {
       subtitle="Real-time stock tracking, alerts and adjustments."
       actions={
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => setShowCategoryDialog(true)}>
+          <Button variant="outline" onClick={() => setShowCategoryDialog(true)}>
             + Category
           </Button>
-          <Button size="sm" onClick={() => { resetProductForm(); setShowProductDialog(true); }}>
+          <Button onClick={() => { resetProductForm(); setShowProductDialog(true); }}>
             <Plus className="size-4 mr-1" /> Product
           </Button>
           <ExportMenu

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import Razorpay from 'razorpay';
 import { supabase } from '../server';
 import { sendTextMessage, STORE_NAME } from './whatsappService';
+import { sendPaymentDocuments } from './documentService';
 
 let razorpay: any = null;
 
@@ -148,11 +149,16 @@ export async function handlePaymentSuccess(paymentLinkId: string, paymentId: str
         (couponCode
           ? `\n\n🎁 Your Thar ROXX giveaway coupon: *${couponCode}*\nKeep this code safe. It is your entry in the Thar ROXX giveaway draw.`
           : '') +
+        `\n\nYour invoice${couponCode ? ' and coupon follow' : ' follows'} below.` +
         `\n\nThank you for shopping with ${STORE_NAME}!`
     );
   } catch (err) {
     console.error('❌ Could not send payment confirmation message');
   }
+
+  // Invoice PDF and coupon image in the background, so the payment redirect is not held up;
+  // failures are logged and never undo the payment
+  void sendPaymentDocuments(wa.order_id, wa.phone_number);
 
   console.log(`✅ Payment captured for order ${order?.order_number}`);
   return { success: true, alreadyProcessed: false, couponCode };
