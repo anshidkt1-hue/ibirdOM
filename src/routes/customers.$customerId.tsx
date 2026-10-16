@@ -2,6 +2,7 @@ import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Phone, MapPin, ShoppingBag, DollarSign } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { ExportMenu } from "@/components/export-menu";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,11 +59,29 @@ function CustomerDetail() {
       title={customer.name}
       subtitle="Profile and order history"
       actions={
-        <Button variant="outline" asChild className="gap-2">
-          <Link to="/customers">
-            <ArrowLeft className="size-4" /> Back
-          </Link>
-        </Button>
+        <>
+          <Button variant="outline" asChild className="gap-2">
+            <Link to="/customers">
+              <ArrowLeft className="size-4" /> Back
+            </Link>
+          </Button>
+          <ExportMenu
+            filename={`ibird-customer-${customer.name.replace(/\W+/g, "-").toLowerCase()}`}
+            title={`${customer.name} · order history`}
+            rows={customerOrders.map((o) => ({
+              Order: o.order_number,
+              Date: formatDate(o.created_at),
+              Channel: o.source === "whatsapp" ? "WhatsApp" : "Counter sale",
+              Status: o.status,
+              Payment: `${o.payment_method} / ${o.payment_status}`,
+              Subtotal: Number(o.subtotal),
+              Discount: Number(o.discount),
+              GST: Number(o.tax),
+              Total: Number(o.total),
+              "Delivery address": o.delivery_address ?? "",
+            }))}
+          />
+        </>
       }
     >
       {/* Customer Info */}

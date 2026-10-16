@@ -75,6 +75,39 @@ export async function fetchInvoicesPage(
   return { rows, total: count ?? 0 };
 }
 
+// Every invoice matching the filters, for export
+export async function fetchAllInvoices(
+  f: InvoiceFilters,
+  onProgress?: (loaded: number) => void,
+): Promise<Invoice[]> {
+  const out: Invoice[] = [];
+  for (let page = 1; ; page++) {
+    const { rows, total } = await fetchInvoicesPage(f, page, 1000);
+    out.push(...rows);
+    onProgress?.(out.length);
+    if (!rows.length || out.length >= total) break;
+  }
+  return out;
+}
+
+export function invoiceExportRows(invoices: Invoice[]) {
+  return invoices.map((i) => ({
+    "Invoice no.": i.invoice_number,
+    Channel: i.channel === "whatsapp" ? "WhatsApp" : "Counter sale",
+    Date: new Date(i.issued_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" }),
+    Order: i.order_number ?? "",
+    Customer: i.customer_name ?? "Walk-in customer",
+    Phone: i.customer_phone ?? "",
+    Subtotal: Number(i.subtotal),
+    Discount: Number(i.discount),
+    GST: Number(i.tax),
+    CGST: Math.round((Number(i.tax) / 2) * 100) / 100,
+    SGST: Math.round((Number(i.tax) / 2) * 100) / 100,
+    Total: Number(i.total),
+    "Sent on WhatsApp": i.sent_at ? "Yes" : "",
+  }));
+}
+
 export async function fetchOrderInvoice(orderId: string): Promise<Invoice | null> {
   const { data, error } = await db.from("invoices").select("*").eq("order_id", orderId).maybeSingle();
   if (error) {
@@ -263,6 +296,38 @@ export async function fetchCouponsPage(
     })),
     total: count ?? 0,
   };
+}
+
+const EXPORT_BATCH = 1000;
+
+// Every coupon of a channel (or all), for export; pages through the table 1,000 rows at a time
+export async function fetchAllCoupons(
+  channel: CouponChannel | "all",
+  search = "",
+  onProgress?: (loaded: number) => void,
+): Promise<Coupon[]> {
+  const out: Coupon[] = [];
+  for (let page = 1; ; page++) {
+    const { rows, total } = await fetchCouponsPage(search, page, EXPORT_BATCH, channel);
+    out.push(...rows);
+    onProgress?.(out.length);
+    if (!rows.length || out.length >= total) break;
+  }
+  return out;
+}
+
+export function couponExportRows(coupons: Coupon[]) {
+  return coupons.map((c) => ({
+    Coupon: c.coupon_code,
+    Channel: (c.channel ?? c.order_source) === "counter" ? "Counter sale" : "WhatsApp",
+    Product: c.product_name ?? "",
+    "Coupon no.": c.coupon_seq && c.coupon_total ? `${c.coupon_seq} of ${c.coupon_total}` : "",
+    Customer: c.customer_name ?? "",
+    Phone: c.customer_phone ?? "",
+    Order: c.order_number ?? "",
+    Issued: new Date(c.created_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
+    Delivered: c.sent_at ? "Sent on WhatsApp" : c.channel === "counter" ? "At counter" : "Code only",
+  }));
 }
 
 export type CouponStats = { total: number; today: number; sent: number; whatsapp: number; counter: number };

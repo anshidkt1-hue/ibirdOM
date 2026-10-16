@@ -4,6 +4,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Download, Eye, FileText, Search } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
+import { ScopedExportMenu, type ExportScope } from "@/components/export-menu";
 import { InvoiceViewer } from "@/components/invoice-viewer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +19,9 @@ import {
 } from "@/components/ui/table";
 import {
   downloadInvoicePdf,
+  fetchAllInvoices,
   fetchInvoicesPage,
+  invoiceExportRows,
   isMissingTable,
   type Invoice,
   type InvoiceChannel,
@@ -68,6 +71,31 @@ function InvoicesPage() {
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
+  const channelName = channel === "whatsapp" ? "WhatsApp" : "Counter sale";
+  const filtered = Boolean(debounced.trim() || from || to);
+  const exportScopes: ExportScope[] = [
+    {
+      key: "page",
+      label: `This page (${rows.length})`,
+      getRows: async () => invoiceExportRows(rows),
+    },
+    {
+      key: channel,
+      label: `All ${channelName} invoices${filtered ? " matching filters" : ""} (${total})`,
+      getRows: (onProgress) =>
+        fetchAllInvoices({ channel, search: debounced, from, to }, onProgress).then(invoiceExportRows),
+    },
+    {
+      key: "both-channels",
+      label: `WhatsApp + counter sale${from || to ? " in this date range" : ""}`,
+      getRows: async (onProgress) => {
+        const wa = await fetchAllInvoices({ channel: "whatsapp", from, to }, onProgress);
+        const cs = await fetchAllInvoices({ channel: "counter", from, to }, (n) => onProgress(wa.length + n));
+        return invoiceExportRows([...wa, ...cs].sort((a, b) => (a.issued_at < b.issued_at ? 1 : -1)));
+      },
+    },
+  ];
+
   const download = async (invoice: Invoice) => {
     setDownloading(invoice.id);
     try {
@@ -80,7 +108,11 @@ function InvoicesPage() {
   };
 
   return (
-    <AppShell title="Invoices" subtitle="Tax invoices for every paid order, numbered separately per channel.">
+    <AppShell
+      title="Invoices"
+      subtitle="Tax invoices for every paid order, numbered separately per channel."
+      actions={<ScopedExportMenu scopes={exportScopes} filename="ibird-invoices" title="Invoices" />}
+    >
       <Tabs value={channel} onValueChange={(v) => setChannel(v as InvoiceChannel)}>
         <TabsList>
           {CHANNELS.map((c) => (

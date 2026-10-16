@@ -4,6 +4,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { CalendarDays, ChevronLeft, ChevronRight, Download, Eye, ImagePlus, Search, Send, Ticket, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
+import { ScopedExportMenu, type ExportScope } from "@/components/export-menu";
 import { StatCard } from "@/components/stat-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,8 @@ import {
   downloadCouponPng,
   fetchCouponsPage,
   fetchCouponStats,
+  fetchAllCoupons,
+  couponExportRows,
   type CouponChannel,
   uploadGiveawayImage,
   type Coupon,
@@ -87,6 +90,38 @@ function CouponsPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // Export by channel from any tab; "this page" and "matching search" follow what is on screen
+  const whatsappCount = stats?.whatsapp ?? 0;
+  const counterCount = stats?.counter ?? 0;
+  const exportScopes: ExportScope[] = [
+    {
+      key: "page",
+      label: `This page (${rows.length})`,
+      getRows: async () => couponExportRows(rows),
+    },
+    {
+      key: "search",
+      label: `Matching "${debounced.trim()}" (${total})`,
+      hidden: !debounced.trim(),
+      getRows: (onProgress) => fetchAllCoupons(channel, debounced, onProgress).then(couponExportRows),
+    },
+    {
+      key: "all",
+      label: `All coupons (${whatsappCount + counterCount})`,
+      getRows: (onProgress) => fetchAllCoupons("all", "", onProgress).then(couponExportRows),
+    },
+    {
+      key: "whatsapp",
+      label: `WhatsApp order coupons (${whatsappCount})`,
+      getRows: (onProgress) => fetchAllCoupons("whatsapp", "", onProgress).then(couponExportRows),
+    },
+    {
+      key: "counter",
+      label: `Counter sale coupons (${counterCount})`,
+      getRows: (onProgress) => fetchAllCoupons("counter", "", onProgress).then(couponExportRows),
+    },
+  ];
+
   const artFor = (c: Coupon): CouponArtInput => ({
     code: c.coupon_code,
     customerName: c.customer_name,
@@ -108,7 +143,11 @@ function CouponsPage() {
   };
 
   return (
-    <AppShell title="Coupons" subtitle="Thar ROXX giveaway coupons: one for every offer product sold, on WhatsApp and at the counter.">
+    <AppShell
+      title="Coupons"
+      subtitle="Thar ROXX giveaway coupons: one for every offer product sold, on WhatsApp and at the counter."
+      actions={<ScopedExportMenu scopes={exportScopes} filename="ibird-coupons" title="Thar ROXX coupons" />}
+    >
       {/* Coupons kept apart by where they were issued */}
       <div className="mb-4 flex flex-wrap gap-1 rounded-xl border border-border bg-card p-1" role="tablist" aria-label="Coupon channel">
         {(

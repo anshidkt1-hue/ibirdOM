@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { BellOff, CheckCheck, Eye, EyeOff, Loader2, RefreshCw } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { ExportMenu } from "@/components/export-menu";
 import { CATEGORY_ICON, NotificationRow, useOpenNotification } from "@/components/notifications";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -59,6 +60,18 @@ function NotificationsPage() {
       subtitle={unreadCount ? `${unreadCount} unread` : "You're all caught up."}
       actions={
         <>
+          <ExportMenu
+            filename="ibird-notifications"
+            title="Notifications"
+            rows={list.map((n) => ({
+              Category: CATEGORY_LABEL[n.category],
+              Priority: n.severity === "critical" ? "Urgent" : n.severity === "warning" ? "Warning" : "Info",
+              Notification: n.title,
+              Details: n.description,
+              When: n.ongoing ? "Ongoing" : new Date(n.at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
+              Read: n.read ? "Yes" : "No",
+            }))}
+          />
           <Button variant="outline" className="gap-2" onClick={() => refetch()}>
             <RefreshCw className="size-4" /> Refresh
           </Button>
