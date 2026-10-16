@@ -42,12 +42,12 @@ const subscribe = (l: () => void) => {
 const EMPTY: string[] = [];
 
 export function useNotifications() {
-  const { user } = useRole();
+  const { user, role } = useRole();
   const key = `${KEY_PREFIX}${user?.id ?? "guest"}`;
 
   const { data: items = [], isLoading, refetch } = useQuery({
-    queryKey: ["notifications"],
-    queryFn: fetchNotifications,
+    queryKey: ["notifications", user?.id ?? null, role ?? null],
+    queryFn: () => fetchNotifications({ userId: user?.id ?? null, role: role ?? null }),
     refetchInterval: 60_000,
     staleTime: 30_000,
   });

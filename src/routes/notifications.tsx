@@ -19,9 +19,10 @@ export const Route = createFileRoute("/notifications")({
   component: NotificationsPage,
 });
 
-const CATEGORIES: NotificationCategory[] = ["orders", "payments", "stock", "documents", "catalog"];
+const CATEGORIES: NotificationCategory[] = ["assignments", "orders", "payments", "stock", "documents", "catalog"];
 
 const CATEGORY_HINT: Record<NotificationCategory, string> = {
+  assignments: "Orders assigned to you, or moved away from you, in the last 7 days.",
   orders: "Paid WhatsApp orders to pack, and orders still waiting for payment.",
   payments: "Payments received in the last 48 hours.",
   stock: "Active products that are out of stock or below their reorder level.",

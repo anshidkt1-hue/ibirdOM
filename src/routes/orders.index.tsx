@@ -65,6 +65,9 @@ const PAGE_SIZES = [10, 25, 50, 100, 250, 500, 1000, 2500];
 const CONFIRM_ABOVE = 50;
 
 export const Route = createFileRoute("/orders/")({
+  // ?assignedTo=<employee id> opens the list filtered to that person (used by assignment notifications)
+  validateSearch: (search: Record<string, unknown>): { assignedTo?: string } =>
+    typeof search["assignedTo"] === "string" ? { assignedTo: search["assignedTo"] } : {},
   head: () => ({
     meta: [
       { title: "Orders — ibird Order Management" },
@@ -179,7 +182,11 @@ function OrdersPage() {
   const [status, setStatus] = useState("all");
   const [source, setSource] = useState("all");
   const [payment, setPayment] = useState("all");
-  const [assignedTo, setAssignedTo] = useState("all");
+  const { assignedTo: assignedFromUrl } = Route.useSearch();
+  const [assignedTo, setAssignedTo] = useState(assignedFromUrl ?? "all");
+  useEffect(() => {
+    if (assignedFromUrl) setAssignedTo(assignedFromUrl);
+  }, [assignedFromUrl]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);

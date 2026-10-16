@@ -5,12 +5,13 @@ import { formatCurrency } from "@/lib/format";
 
 const db = supabase as unknown as { from: (table: string) => any };
 
-export type NotificationCategory = "orders" | "payments" | "stock" | "documents" | "catalog";
+export type NotificationCategory = "assignments" | "orders" | "payments" | "stock" | "documents" | "catalog";
 export type NotificationSeverity = "critical" | "warning" | "info";
 
 export type NotificationLink =
   | { to: "/orders/$orderId"; params: { orderId: string } }
   | { to: "/inventory"; search: { tab: string } }
+  | { to: "/orders"; search: { assignedTo: string } }
   | { to: "/orders" | "/invoices" | "/coupons" };
 
 export type AppNotification = {
@@ -25,6 +26,7 @@ export type AppNotification = {
 };
 
 export const CATEGORY_LABEL: Record<NotificationCategory, string> = {
+  assignments: "Assignments",
   orders: "Orders",
   payments: "Payments",
   stock: "Stock",
@@ -35,37 +37,51 @@ export const CATEGORY_LABEL: Record<NotificationCategory, string> = {
 const SUPPORTED_PHOTO = /\.(jpe?g|png)(\?|$)/i;
 const HOUR = 3600_000;
 
-export async function fetchNotifications(): Promise<AppNotification[]> {
+// Who is looking: staff see their own orders and assignments; admins and managers see everything
+export type NotificationViewer = { userId: string | null; role: string | null };
+
+const ASSIGNMENT_WINDOW_MS = 2 * 60_000; // rows from one bulk assignment are written seconds apart
+
+export async function fetchNotifications(viewer: NotificationViewer = { userId: null, role: null }): Promise<AppNotification[]> {
   const since48h = new Date(Date.now() - 48 * HOUR).toISOString();
   const tenMinAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+  const isStaff = viewer.role === "staff";
+  // Staff only hear about orders assigned to them
+  const mine = (q: any) => (isStaff && viewer.userId ? q.eq("assigned_to", viewer.userId) : q);
 
-  const [toPack, awaiting, paidRecent, products, unsent] = await Promise.all([
+  const [toPack, awaiting, paidRecent, products, unsent, assignments] = await Promise.all([
     // Paid WhatsApp orders that nobody has started processing
-    db
-      .from("orders")
-      .select("id, order_number, customer_name, total, created_at, updated_at")
-      .eq("source", "whatsapp")
-      .eq("status", "pending")
-      .eq("payment_status", "paid")
+    mine(
+      db
+        .from("orders")
+        .select("id, order_number, customer_name, total, created_at, updated_at")
+        .eq("source", "whatsapp")
+        .eq("status", "pending")
+        .eq("payment_status", "paid"),
+    )
       .order("updated_at", { ascending: false })
       .limit(50),
     // WhatsApp orders placed in the last 48 h whose payment has not arrived
-    db
-      .from("orders")
-      .select("id, order_number, customer_name, total, created_at")
-      .eq("source", "whatsapp")
-      .eq("payment_status", "unpaid")
-      .neq("status", "cancelled")
-      .gte("created_at", since48h)
+    mine(
+      db
+        .from("orders")
+        .select("id, order_number, customer_name, total, created_at")
+        .eq("source", "whatsapp")
+        .eq("payment_status", "unpaid")
+        .neq("status", "cancelled")
+        .gte("created_at", since48h),
+    )
       .order("created_at", { ascending: false })
       .limit(30),
     // Payments received in the last 48 h
-    db
-      .from("orders")
-      .select("id, order_number, customer_name, total, updated_at")
-      .eq("source", "whatsapp")
-      .eq("payment_status", "paid")
-      .gte("updated_at", since48h)
+    mine(
+      db
+        .from("orders")
+        .select("id, order_number, customer_name, total, updated_at")
+        .eq("source", "whatsapp")
+        .eq("payment_status", "paid")
+        .gte("updated_at", since48h),
+    )
       .order("updated_at", { ascending: false })
       .limit(30),
     db
@@ -82,6 +98,16 @@ export async function fetchNotifications(): Promise<AppNotification[]> {
       .gte("issued_at", new Date(Date.now() - 7 * 24 * HOUR).toISOString())
       .order("issued_at", { ascending: false })
       .limit(20),
+    // Orders assigned to or taken away from this user in the last 7 days
+    viewer.userId
+      ? db
+          .from("order_assignment_history")
+          .select("id, order_id, old_assigned_to, new_assigned_to, assigned_by, assigned_at")
+          .or(`new_assigned_to.eq.${viewer.userId},old_assigned_to.eq.${viewer.userId}`)
+          .gte("assigned_at", new Date(Date.now() - 7 * 24 * HOUR).toISOString())
+          .order("assigned_at", { ascending: false })
+          .limit(300)
+      : Promise.resolve({ data: [] }),
   ]);
 
   const out: AppNotification[] = [];
@@ -176,9 +202,97 @@ export async function fetchNotifications(): Promise<AppNotification[]> {
     });
   }
 
+  out.push(...(await assignmentNotifications((assignments.data ?? []) as AssignmentRow[], viewer.userId)));
+
+  // Admin tasks (undelivered invoices, catalogue photos) are not shown to staff
+  const visible = isStaff ? out.filter((n) => n.category !== "documents" && n.category !== "catalog") : out;
+
   const rank: Record<NotificationSeverity, number> = { critical: 0, warning: 1, info: 2 };
   // Most urgent first, then newest
-  return out.sort((a, b) => rank[a.severity] - rank[b.severity] || (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  return visible.sort((a, b) => rank[a.severity] - rank[b.severity] || (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+}
+
+type AssignmentRow = {
+  id: string;
+  order_id: string;
+  old_assigned_to: string | null;
+  new_assigned_to: string | null;
+  assigned_by: string | null;
+  assigned_at: string;
+};
+
+// "Anshid assigned 10 orders to you": rows by the same person within a couple of minutes are one action
+async function assignmentNotifications(rows: AssignmentRow[], me: string | null): Promise<AppNotification[]> {
+  if (!me || !rows.length) return [];
+  // Assigning to yourself is not news
+  const relevant = rows.filter((r) => r.assigned_by !== me && r.old_assigned_to !== r.new_assigned_to);
+
+  type Group = { kind: "to" | "from"; by: string | null; to: string | null; rows: AssignmentRow[] };
+  const groups: Group[] = [];
+  for (const r of relevant) {
+    const kind = r.new_assigned_to === me ? "to" : "from";
+    const last = groups[groups.length - 1];
+    const prev = last?.rows[last.rows.length - 1];
+    if (
+      last &&
+      prev &&
+      last.kind === kind &&
+      last.by === r.assigned_by &&
+      (kind === "to" || last.to === r.new_assigned_to) &&
+      Math.abs(new Date(prev.assigned_at).getTime() - new Date(r.assigned_at).getTime()) <= ASSIGNMENT_WINDOW_MS
+    ) {
+      last.rows.push(r);
+    } else {
+      groups.push({ kind, by: r.assigned_by, to: r.new_assigned_to, rows: [r] });
+    }
+  }
+  if (!groups.length) return [];
+
+  const people = [...new Set(groups.flatMap((g) => [g.by, g.to]).filter(Boolean))] as string[];
+  const orderIds = [...new Set(groups.flatMap((g) => g.rows.map((r) => r.order_id)))];
+  const [{ data: emps }, { data: orders }] = await Promise.all([
+    people.length ? db.from("employees").select("id, name").in("id", people) : Promise.resolve({ data: [] }),
+    db.from("orders").select("id, order_number").in("id", orderIds.slice(0, 300)),
+  ]);
+  const nameOf = new Map(((emps ?? []) as any[]).map((e) => [e.id, e.name as string]));
+  const numberOf = new Map(((orders ?? []) as any[]).map((o) => [o.id, o.order_number as string]));
+
+  return groups.map((g) => {
+    const who = (g.by && nameOf.get(g.by)) || "An admin";
+    const count = g.rows.length;
+    const numbers = g.rows.map((r) => numberOf.get(r.order_id)).filter(Boolean) as string[];
+    const list = numbers.slice(0, 3).join(", ") + (numbers.length > 3 ? ` +${numbers.length - 3} more` : "");
+    const single = count === 1 && g.rows[0];
+    if (g.kind === "to") {
+      return {
+        id: `assign-to-${g.rows[0]!.id}-${count}`,
+        category: "assignments" as const,
+        severity: "critical" as const,
+        title: single
+          ? `${who} assigned order ${numbers[0] ?? ""} to you`.replace("order  to", "an order to")
+          : `${who} assigned ${count} orders to you`,
+        description: single ? "Open the order to start processing it" : list,
+        at: g.rows[0]!.assigned_at,
+        link: single
+          ? { to: "/orders/$orderId" as const, params: { orderId: single.order_id } }
+          : { to: "/orders" as const, search: { assignedTo: me } },
+      };
+    }
+    const toName = g.to ? nameOf.get(g.to) ?? "someone else" : null;
+    return {
+      id: `assign-from-${g.rows[0]!.id}-${count}`,
+      category: "assignments" as const,
+      severity: "info" as const,
+      title: toName
+        ? `${who} moved ${count === 1 ? "an order" : `${count} orders`} from you to ${toName}`
+        : `${who} unassigned ${count === 1 ? "an order" : `${count} orders`} from you`,
+      description: list || "No action needed",
+      at: g.rows[0]!.assigned_at,
+      link: single
+        ? { to: "/orders/$orderId" as const, params: { orderId: single.order_id } }
+        : { to: "/orders" as const },
+    };
+  });
 }
 
 export function timeAgo(iso: string) {
