@@ -68,7 +68,6 @@ const WHITE: RGB = [255, 255, 255];
 const DEFAULT_NOTES = (store: string) => [
   "This invoice is valid for 15 days from the date of issue.",
   "GST is charged as applicable and shown separately.",
-  "Delivery and installation charges are extra (if applicable).",
   "Warranty as per manufacturer terms; keep this bill for service claims.",
   "Goods once sold will not be taken back. Subject to availability of stock.",
   `Thank you for choosing ${store}.`,
