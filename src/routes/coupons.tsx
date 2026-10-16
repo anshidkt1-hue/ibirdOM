@@ -24,6 +24,7 @@ import {
   downloadCouponPng,
   fetchCouponsPage,
   fetchCouponStats,
+  type CouponChannel,
   uploadGiveawayImage,
   type Coupon,
   type CouponArtInput,
@@ -50,22 +51,23 @@ function CouponsPage() {
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
   const [page, setPage] = useState(1);
+  const [channel, setChannel] = useState<CouponChannel | "all">("all");
   const [preview, setPreview] = useState<Coupon | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search), 300);
     return () => clearTimeout(t);
   }, [search]);
-  useEffect(() => setPage(1), [debounced]);
+  useEffect(() => setPage(1), [debounced, channel]);
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],
     queryFn: () => fetchSettings().catch(() => ({}) as Awaited<ReturnType<typeof fetchSettings>>),
   });
-  const { data: stats } = useQuery({ queryKey: ["coupon-stats"], queryFn: fetchCouponStats });
+  const { data: stats } = useQuery({ queryKey: ["coupon-stats", channel], queryFn: () => fetchCouponStats(channel) });
   const { data, isLoading } = useQuery({
-    queryKey: ["coupons", debounced, page],
-    queryFn: () => fetchCouponsPage(debounced, page, PAGE_SIZE),
+    queryKey: ["coupons", channel, debounced, page],
+    queryFn: () => fetchCouponsPage(debounced, page, PAGE_SIZE, channel),
     placeholderData: keepPreviousData,
   });
   const rows = data?.rows ?? [];
@@ -107,10 +109,47 @@ function CouponsPage() {
 
   return (
     <AppShell title="Coupons" subtitle="Thar ROXX giveaway coupons: one for every offer product sold, on WhatsApp and at the counter.">
+      {/* Coupons kept apart by where they were issued */}
+      <div className="mb-4 flex flex-wrap gap-1 rounded-xl border border-border bg-card p-1" role="tablist" aria-label="Coupon channel">
+        {(
+          [
+            ["all", "All coupons", (stats?.whatsapp ?? 0) + (stats?.counter ?? 0)],
+            ["whatsapp", "WhatsApp orders", stats?.whatsapp ?? 0],
+            ["counter", "Counter sale", stats?.counter ?? 0],
+          ] as const
+        ).map(([value, label, count]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            aria-selected={channel === value}
+            onClick={() => setChannel(value)}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+              channel === value ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-secondary"
+            }`}
+          >
+            {label}
+            <span
+              className={`rounded-full px-1.5 text-xs ${channel === value ? "bg-primary-foreground/20" : "bg-secondary"}`}
+            >
+              {formatNumber(count)}
+            </span>
+          </button>
+        ))}
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Coupons issued" value={formatNumber(stats?.total ?? 0)} icon={Ticket} />
+        <StatCard
+          label={channel === "all" ? "Coupons issued" : channel === "whatsapp" ? "WhatsApp coupons" : "Counter sale coupons"}
+          value={formatNumber(stats?.total ?? 0)}
+          icon={Ticket}
+        />
         <StatCard label="Issued today" value={formatNumber(stats?.today ?? 0)} icon={CalendarDays} tone="brand" />
-        <StatCard label="Sent on WhatsApp" value={formatNumber(stats?.sent ?? 0)} icon={Send} tone="success" />
+        {channel === "counter" ? (
+          <StatCard label="Handed over at the counter" value={formatNumber(stats?.total ?? 0)} hint="Printed or downloaded with the bill" icon={Send} tone="success" />
+        ) : (
+          <StatCard label="Sent on WhatsApp" value={formatNumber(stats?.sent ?? 0)} icon={Send} tone="success" />
+        )}
       </div>
 
       <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,420px)]">
@@ -133,7 +172,7 @@ function CouponsPage() {
                   <TableHead>Customer</TableHead>
                   <TableHead>Order</TableHead>
                   <TableHead>Issued</TableHead>
-                  <TableHead>WhatsApp</TableHead>
+                  <TableHead>Delivered</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -160,7 +199,7 @@ function CouponsPage() {
                             {c.order_number}
                           </Link>
                           <span className="block text-xs text-muted-foreground">
-                            {c.order_source === "whatsapp" ? "WhatsApp" : "Counter sale"}
+                            {(c.channel ?? c.order_source) === "whatsapp" ? "WhatsApp" : "Counter sale"}
                           </span>
                         </>
                       ) : (
@@ -170,7 +209,9 @@ function CouponsPage() {
                     <TableCell className="whitespace-nowrap text-muted-foreground">{formatDate(c.created_at)}</TableCell>
                     <TableCell>
                       {c.sent_at ? (
-                        <Badge variant="secondary" title={formatDateTime(c.sent_at)}>Sent</Badge>
+                        <Badge variant="secondary" title={formatDateTime(c.sent_at)}>Sent on WhatsApp</Badge>
+                      ) : c.channel === "counter" ? (
+                        <span className="text-xs text-muted-foreground">At counter</span>
                       ) : (
                         <span className="text-xs text-muted-foreground">Code only</span>
                       )}

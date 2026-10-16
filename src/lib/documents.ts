@@ -218,6 +218,7 @@ export type Coupon = {
   created_at: string;
   image_url: string | null;
   sent_at: string | null;
+  channel?: CouponChannel | null | undefined;
   product_name?: string | null | undefined;
   coupon_seq?: number | null | undefined;
   coupon_total?: number | null | undefined;
@@ -227,12 +228,16 @@ export type Coupon = {
   customer_phone?: string | null | undefined;
 };
 
+export type CouponChannel = "whatsapp" | "counter";
+
 export async function fetchCouponsPage(
   search: string,
   page: number,
   pageSize: number,
+  channel: CouponChannel | "all" = "all",
 ): Promise<{ rows: Coupon[]; total: number }> {
   let q = db.from("coupons").select("*", { count: "exact" }).eq("campaign", "thar-roxx-giveaway");
+  if (channel !== "all") q = q.eq("channel", channel);
   const s = cleanSearch(search);
   if (s) q = q.ilike("coupon_code", `%${s}%`);
   const start = (page - 1) * pageSize;
@@ -260,16 +265,28 @@ export async function fetchCouponsPage(
   };
 }
 
-export async function fetchCouponStats(): Promise<{ total: number; today: number; sent: number }> {
+export type CouponStats = { total: number; today: number; sent: number; whatsapp: number; counter: number };
+
+// Totals for the selected channel, plus the size of each channel for the tabs
+export async function fetchCouponStats(channel: CouponChannel | "all" = "all"): Promise<CouponStats> {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
   const base = () => db.from("coupons").select("id", { count: "exact", head: true }).eq("campaign", "thar-roxx-giveaway");
-  const [all, today, sent] = await Promise.all([
-    base(),
-    base().gte("created_at", start.toISOString()),
-    base().not("sent_at", "is", null),
+  const scoped = () => (channel === "all" ? base() : base().eq("channel", channel));
+  const [all, today, sent, whatsapp, counter] = await Promise.all([
+    scoped(),
+    scoped().gte("created_at", start.toISOString()),
+    scoped().not("sent_at", "is", null),
+    base().eq("channel", "whatsapp"),
+    base().eq("channel", "counter"),
   ]);
-  return { total: all.count ?? 0, today: today.count ?? 0, sent: sent.error ? 0 : (sent.count ?? 0) };
+  return {
+    total: all.count ?? 0,
+    today: today.count ?? 0,
+    sent: sent.error ? 0 : (sent.count ?? 0),
+    whatsapp: whatsapp.count ?? 0,
+    counter: counter.count ?? 0,
+  };
 }
 
 async function toDataUri(url: string): Promise<string | null> {
