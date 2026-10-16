@@ -21,7 +21,8 @@ export type SyncResult = { synced: number; removed: number; skipped: string[] };
 
 async function fetchChannelProducts() {
   const fields = 'id, name, variant, price, stock, gst, image_url, active, category';
-  let { data, error } = await supabase.from('products').select(fields).eq('sales_channel', 'online');
+  // 'both' = sold on WhatsApp and at the counter from the same stock
+  let { data, error } = await supabase.from('products').select(fields).in('sales_channel', ['online', 'both']);
   if (error && /sales_channel/.test(error.message)) {
     ({ data, error } = await supabase.from('products').select(fields));
   }

@@ -53,15 +53,21 @@ export type Product = {
   active: boolean;
   image_url?: string | null;
   sales_channel?: SalesChannel;
+  // Thar ROXX offer: one giveaway coupon per unit sold, on WhatsApp and at the counter
+  giveaway_coupon?: boolean;
   created_at: string;
 };
 
-export type SalesChannel = "counter" | "online";
+// "both" = sold on WhatsApp and at the counter from the same stock
+export type SalesChannel = "counter" | "online" | "both";
 
 // Products created before the counter/online split were the WhatsApp catalogue.
 export function channelOf(product: Pick<Product, "sales_channel">): SalesChannel {
   return product.sales_channel ?? "online";
 }
+
+export const sellsOnline = (p: Pick<Product, "sales_channel">) => channelOf(p) !== "counter";
+export const sellsAtCounter = (p: Pick<Product, "sales_channel">) => channelOf(p) !== "online";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -649,7 +655,7 @@ export async function findCounterProductByCode(code: string): Promise<Product | 
     .eq("active", true)
     .or(`barcode.eq.${value},sku.eq.${value}`);
   if (error) throw error;
-  const matches = ((data ?? []) as Product[]).filter((p) => channelOf(p) === "counter");
+  const matches = ((data ?? []) as Product[]).filter(sellsAtCounter);
   return matches.find((p) => p.barcode === value) ?? matches[0] ?? null;
 }
 

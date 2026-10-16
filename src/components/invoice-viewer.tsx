@@ -1,12 +1,30 @@
 import { useEffect, useState } from "react";
-import { Download, ExternalLink, Loader2 } from "lucide-react";
+import { Download, ExternalLink, Loader2, Printer, Ticket } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { downloadInvoicePdf, invoicePdfUrl, type Invoice } from "@/lib/documents";
+import {
+  downloadCouponsPdf,
+  downloadInvoicePdf,
+  invoicePdfUrl,
+  openCouponsPdf,
+  type CouponArtInput,
+  type Invoice,
+} from "@/lib/documents";
+
+export type ViewerCoupons = { arts: CouponArtInput[]; orderNumber: string };
 
 // Shows an invoice PDF inside the dashboard, with download and open-in-new-tab
-export function InvoiceViewer({ invoice, onClose }: { invoice: Invoice | null; onClose: () => void }) {
+export function InvoiceViewer({
+  invoice,
+  onClose,
+  coupons,
+}: {
+  invoice: Invoice | null;
+  onClose: () => void;
+  // Giveaway coupons of the sale (offer products), shown under the invoice to print or download
+  coupons?: ViewerCoupons | null;
+}) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,6 +66,35 @@ export function InvoiceViewer({ invoice, onClose }: { invoice: Invoice | null; o
             </div>
           )}
         </div>
+        {coupons && coupons.arts.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">
+            <Ticket className="size-4 shrink-0 text-destructive" />
+            <p className="min-w-0 flex-1 text-sm">
+              <span className="font-semibold">
+                {coupons.arts.length} Thar ROXX coupon{coupons.arts.length > 1 ? "s" : ""}
+              </span>{" "}
+              <span className="font-mono text-xs text-muted-foreground">
+                {coupons.arts.map((a) => a.code).join(", ")}
+              </span>
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => openCouponsPdf(coupons.arts, coupons.orderNumber).catch((e: Error) => toast.error(e.message))}
+            >
+              <Printer className="size-3.5" /> Print coupons
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={() => downloadCouponsPdf(coupons.arts, coupons.orderNumber).catch((e: Error) => toast.error(e.message))}
+            >
+              <Download className="size-3.5" /> Download
+            </Button>
+          </div>
+        )}
         <DialogFooter className="flex-row flex-wrap justify-end gap-2">
           <Button variant="outline" className="gap-2" disabled={!url} onClick={() => url && window.open(url, "_blank")}>
             <ExternalLink className="size-4" /> Open in new tab

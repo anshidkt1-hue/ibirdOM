@@ -43,6 +43,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import {
   adjustStock,
   fetchProducts,
@@ -56,7 +58,8 @@ import {
   updateCategory,
   deleteCategory,
   channelOf,
-  copyProductToChannel,
+  sellsAtCounter,
+  sellsOnline,
   type Product,
   type Category,
   type SalesChannel,
@@ -96,13 +99,19 @@ type ProductFormData = {
   hsn_code: string;
   gst: number;
   sales_channel: SalesChannel;
+  giveaway_coupon: boolean;
   image_url?: string;
 };
 
 const CHANNEL_LABEL: Record<SalesChannel, string> = {
   online: "WhatsApp / online",
   counter: "Counter sale",
+  both: "WhatsApp + counter",
 };
+
+// Two ticks in the form map to one channel value: online, counter or both (one shared stock)
+const channelFromTicks = (online: boolean, counter: boolean): SalesChannel =>
+  online && counter ? "both" : counter ? "counter" : "online";
 
 function InventoryPage() {
   const queryClient = useQueryClient();
@@ -146,6 +155,7 @@ function InventoryPage() {
     hsn_code: "",
     gst: 5,
     sales_channel: "online",
+    giveaway_coupon: false,
   });
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
 
@@ -223,15 +233,6 @@ function InventoryPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const copyProduct = useMutation({
-    mutationFn: (p: Product) => copyProductToChannel(p, channelOf(p) === "online" ? "counter" : "online"),
-    onSuccess: (copy) => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      toast.success(`Copied to ${CHANNEL_LABEL[channelOf(copy)]} as ${copy.sku} with 0 stock`);
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
   const deleteProductMutation = useMutation({
     mutationFn: (id: string) => deleteProduct(id),
     onSuccess: () => {
@@ -283,6 +284,7 @@ function InventoryPage() {
       hsn_code: "",
       gst: 5,
       sales_channel: tabChannel,
+      giveaway_coupon: false,
     });
     setSelectedImage(null);
     setEditingProduct(null);
@@ -303,6 +305,7 @@ function InventoryPage() {
       hsn_code: product.hsn_code || "",
       gst: Number(product.gst ?? 5),
       sales_channel: channelOf(product),
+      giveaway_coupon: Boolean(product.giveaway_coupon),
       ...(product.image_url ? { image_url: product.image_url } : {}),
     });
     setShowProductDialog(true);
@@ -312,8 +315,8 @@ function InventoryPage() {
         <>
           <p className="mb-3 text-sm text-muted-foreground">
             {channel === "online"
-              ? "Shown to customers in the WhatsApp catalogue. Changes here update WhatsApp immediately."
-              : "Sold at the counter. Stock here is separate from WhatsApp / online stock."}
+              ? "Shown to customers in the WhatsApp catalogue. Products marked Both are also sold at the counter from the same stock."
+              : "Sold at the counter. Products marked Both are also on WhatsApp and share the same stock."}
           </p>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="relative sm:col-span-2">
@@ -354,7 +357,7 @@ function InventoryPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.filter((p) => channelOf(p) === channel).map((p) => (
+                {filtered.filter((p) => (channel === "online" ? sellsOnline(p) : sellsAtCounter(p))).map((p) => (
                   <TableRow key={p.id}>
                     <TableCell>
                       {p.image_url ? (
@@ -374,6 +377,18 @@ function InventoryPage() {
                       {p.variant && (
                         <span className="ml-1 text-xs text-muted-foreground">({p.variant})</span>
                       )}
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {channelOf(p) === "both" && (
+                          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                            Both · one stock
+                          </span>
+                        )}
+                        {p.giveaway_coupon && (
+                          <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">
+                            🎁 Offer coupon
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {p.sku}
@@ -407,15 +422,6 @@ function InventoryPage() {
                             </Button>
                             <Button size="sm" variant="outline" onClick={() => setTarget(p)} title="Adjust stock">
                               Adjust
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={copyProduct.isPending}
-                              onClick={() => copyProduct.mutate(p)}
-                              title={channel === "online" ? "Copy to counter sale products" : "Copy to WhatsApp / online products"}
-                            >
-                              <Copy className="size-3" />
                             </Button>
                             <Button
                               size="sm"
@@ -465,6 +471,7 @@ function InventoryPage() {
               Cost: Number(p.cost_price),
               Price: Number(p.price),
               GST: Number(p.gst ?? 0),
+              "Offer coupon": p.giveaway_coupon ? "Yes" : "No",
             }))}
           />
         </div>
@@ -726,19 +733,60 @@ function InventoryPage() {
 
             <div>
               <Label>Sold through *</Label>
-              <Select
-                value={formData.sales_channel}
-                onValueChange={(v) => setFormData({ ...formData, sales_channel: v as SalesChannel })}
-              >
-                <SelectTrigger className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="online">WhatsApp / online (shown in the WhatsApp catalogue)</SelectItem>
-                  <SelectItem value="counter">Counter sale (shown in Counter Sale)</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {(
+                  [
+                    ["online", "WhatsApp / online", "Shown in the WhatsApp catalogue"],
+                    ["counter", "Counter sale", "Shown in Counter Sale"],
+                  ] as const
+                ).map(([key, label, hint]) => {
+                  const online = sellsOnline(formData);
+                  const counter = sellsAtCounter(formData);
+                  const checked = key === "online" ? online : counter;
+                  return (
+                    <label
+                      key={key}
+                      className="flex cursor-pointer items-start gap-2 rounded-md border border-border p-2.5 hover:bg-secondary"
+                    >
+                      <Checkbox
+                        className="mt-0.5"
+                        checked={checked}
+                        onCheckedChange={(v) => {
+                          const next = v === true;
+                          // At least one channel stays ticked
+                          const o = key === "online" ? next : online;
+                          const c = key === "counter" ? next : counter;
+                          if (!o && !c) return;
+                          setFormData({ ...formData, sales_channel: channelFromTicks(o, c) });
+                        }}
+                      />
+                      <span>
+                        <span className="block text-sm font-medium">{label}</span>
+                        <span className="block text-xs text-muted-foreground">{hint}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              {formData.sales_channel === "both" && (
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Sold on WhatsApp and at the counter from one stock count.
+                </p>
+              )}
             </div>
+
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+              <span>
+                <span className="block text-sm font-semibold">🎁 Thar ROXX offer product</span>
+                <span className="block text-xs text-muted-foreground">
+                  Gives one giveaway coupon for every unit sold, on WhatsApp and at the counter.
+                </span>
+              </span>
+              <Switch
+                checked={formData.giveaway_coupon}
+                onCheckedChange={(v) => setFormData({ ...formData, giveaway_coupon: v })}
+              />
+            </label>
 
             <div className="grid grid-cols-2 gap-3">
               <div>

@@ -45,7 +45,7 @@ const cleanSearch = (s?: string) => s?.trim().replace(/[,()%*\\]/g, " ").trim() 
 async function attachOrderNumbers<T extends { order_id: string | null }>(rows: T[]) {
   const ids = [...new Set(rows.map((r) => r.order_id).filter(Boolean))] as string[];
   if (!ids.length) return rows.map((r) => ({ ...r, order_number: undefined as string | undefined, order: undefined as any }));
-  const { data } = await db.from("orders").select("id, order_number, customer_name, customer_phone").in("id", ids);
+  const { data } = await db.from("orders").select("id, order_number, customer_name, customer_phone, source").in("id", ids);
   const byId = new Map(((data ?? []) as any[]).map((o) => [o.id, o]));
   return rows.map((r) => {
     const order = r.order_id ? byId.get(r.order_id) : undefined;
@@ -222,6 +222,7 @@ export type Coupon = {
   coupon_seq?: number | null | undefined;
   coupon_total?: number | null | undefined;
   order_number?: string | undefined;
+  order_source?: string | null | undefined;
   customer_name?: string | null | undefined;
   customer_phone?: string | null | undefined;
 };
@@ -251,6 +252,7 @@ export async function fetchCouponsPage(
   return {
     rows: rows.map(({ order, ...r }) => ({
       ...r,
+      order_source: order?.source ?? null,
       customer_name: order?.customer_name ?? byId.get(r.customer_id)?.name ?? null,
       customer_phone: order?.customer_phone ?? byId.get(r.customer_id)?.phone ?? null,
     })),
@@ -326,7 +328,7 @@ async function couponCanvas(c: CouponArtInput) {
 }
 
 // Every coupon of an order in one PDF (the same file the customer gets on WhatsApp)
-export async function downloadCouponsPdf(arts: CouponArtInput[], orderNumber: string) {
+async function couponsDoc(arts: CouponArtInput[], orderNumber: string) {
   const entries = [];
   for (const art of arts) {
     entries.push({
@@ -337,12 +339,55 @@ export async function downloadCouponsPdf(arts: CouponArtInput[], orderNumber: st
     });
   }
   const first = arts[0];
-  buildCouponsPdf(entries, {
+  return buildCouponsPdf(entries, {
     orderNumber,
     customerName: first?.customerName,
     storeName: first?.storeName,
     issuedAt: first?.issuedAt,
-  }).save(couponsFileName(orderNumber));
+  });
+}
+
+export async function downloadCouponsPdf(arts: CouponArtInput[], orderNumber: string) {
+  (await couponsDoc(arts, orderNumber)).save(couponsFileName(orderNumber));
+}
+
+// Opens the coupons PDF in a new tab, where it can be printed for the customer
+export async function openCouponsPdf(arts: CouponArtInput[], orderNumber: string) {
+  const tab = window.open("", "_blank");
+  const url = URL.createObjectURL((await couponsDoc(arts, orderNumber)).output("blob"));
+  if (tab) tab.location.href = url;
+  else window.location.assign(url);
+}
+
+// Coupons for the offer products of a counter sale (one per unit), issued once by the database
+export async function issueOrderCoupons(orderId: string): Promise<Coupon[]> {
+  const { data, error } = await db.rpc("issue_giveaway_coupons", { p_order_id: orderId });
+  if (error) throw error;
+  return (data ?? []) as Coupon[];
+}
+
+// Coupon artwork for an order's coupons, with the store name and Thar ROXX photo from Settings
+export async function couponArtsFor(
+  coupons: Coupon[],
+  order: { customer_name?: string | null; order_number: string },
+): Promise<CouponArtInput[]> {
+  const { data: settings } = await db
+    .from("settings")
+    .select("company_name, giveaway_image_url")
+    .order("created_at")
+    .limit(1)
+    .maybeSingle();
+  return coupons.map((c) => ({
+    code: c.coupon_code,
+    customerName: order.customer_name,
+    orderNumber: order.order_number,
+    issuedAt: c.created_at,
+    productName: c.product_name,
+    seq: c.coupon_seq,
+    total: c.coupon_total ?? coupons.length,
+    storeName: settings?.company_name || "ibird",
+    imageUrl: settings?.giveaway_image_url ?? null,
+  }));
 }
 
 export async function downloadCouponPng(c: CouponArtInput) {

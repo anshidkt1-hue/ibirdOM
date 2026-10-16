@@ -106,7 +106,7 @@ function CouponsPage() {
   };
 
   return (
-    <AppShell title="Coupons" subtitle="Thar ROXX giveaway coupons: one for every product in a paid WhatsApp order.">
+    <AppShell title="Coupons" subtitle="Thar ROXX giveaway coupons: one for every offer product sold, on WhatsApp and at the counter.">
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Coupons issued" value={formatNumber(stats?.total ?? 0)} icon={Ticket} />
         <StatCard label="Issued today" value={formatNumber(stats?.today ?? 0)} icon={CalendarDays} tone="brand" />
@@ -155,9 +155,14 @@ function CouponsPage() {
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {c.order_id && c.order_number ? (
-                        <Link to="/orders/$orderId" params={{ orderId: c.order_id }} className="font-medium text-primary hover:underline">
-                          {c.order_number}
-                        </Link>
+                        <>
+                          <Link to="/orders/$orderId" params={{ orderId: c.order_id }} className="font-medium text-primary hover:underline">
+                            {c.order_number}
+                          </Link>
+                          <span className="block text-xs text-muted-foreground">
+                            {c.order_source === "whatsapp" ? "WhatsApp" : "Counter sale"}
+                          </span>
+                        </>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
@@ -183,7 +188,7 @@ function CouponsPage() {
                 {!rows.length && (
                   <TableRow>
                     <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
-                      {isLoading ? "Loading coupons…" : "No coupons yet. Coupons are issued when a WhatsApp order is paid, one per product."}
+                      {isLoading ? "Loading coupons…" : "No coupons yet. Coupons are issued for offer products when a WhatsApp order is paid or a counter sale is completed."}
                     </TableCell>
                   </TableRow>
                 )}

@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   calculateTotals,
-  channelOf,
+  sellsAtCounter,
   createOrder,
   createOrLinkCustomer,
   fetchCustomers,
@@ -49,8 +49,8 @@ import {
 } from "@/lib/pos-store";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { useRole } from "@/components/role-provider";
-import { InvoiceViewer } from "@/components/invoice-viewer";
-import { ensureInvoice, type Invoice } from "@/lib/documents";
+import { InvoiceViewer, type ViewerCoupons } from "@/components/invoice-viewer";
+import { couponArtsFor, ensureInvoice, issueOrderCoupons, type Invoice } from "@/lib/documents";
 
 export const Route = createFileRoute("/pos")({
   head: () => ({
@@ -125,7 +125,7 @@ function CounterSale() {
   const canSell = can("edit");
 
   const counterProducts = useMemo(
-    () => products.filter((p) => p.active && channelOf(p) === "counter"),
+    () => products.filter((p) => p.active && sellsAtCounter(p)),
     [products],
   );
 
@@ -218,6 +218,7 @@ function CounterSale() {
   };
 
   const [saleInvoice, setSaleInvoice] = useState<Invoice | null>(null);
+  const [saleCoupons, setSaleCoupons] = useState<ViewerCoupons | null>(null);
 
   const checkout = useMutation({
     mutationFn: () => {
@@ -249,10 +250,28 @@ function CounterSale() {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       resetDraft();
       setSearch("");
-      // Show the invoice to print or download; the next bill can start as soon as it is closed
+      queryClient.invalidateQueries({ queryKey: ["coupons"] });
+      queryClient.invalidateQueries({ queryKey: ["coupon-stats"] });
+
+      // Thar ROXX coupons for the offer products in the bill (one per unit)
+      let coupons: ViewerCoupons | null = null;
+      try {
+        const issued = await issueOrderCoupons(order.id);
+        if (issued.length) {
+          coupons = { arts: await couponArtsFor(issued, order), orderNumber: order.order_number };
+        }
+      } catch (e) {
+        toast.error(`Coupons could not be issued: ${e instanceof Error ? e.message : "unknown error"}`);
+      }
+
+      // Show the invoice (and coupons) to print or download; the next bill starts when it is closed
       try {
         const invoice = await ensureInvoice(order.id);
-        toast.success(`Sale recorded · invoice ${invoice.invoice_number}`);
+        toast.success(
+          `Sale recorded · invoice ${invoice.invoice_number}` +
+            (coupons ? ` · ${coupons.arts.length} coupon${coupons.arts.length > 1 ? "s" : ""}` : ""),
+        );
+        setSaleCoupons(coupons);
         setSaleInvoice(invoice);
       } catch {
         toast.success(`Sale ${order.order_number} recorded`);
@@ -371,6 +390,11 @@ function CounterSale() {
                   <ProductThumb product={p} className="mb-2 size-12" />
                   <p className="line-clamp-2 break-words text-sm font-semibold leading-snug">{p.name}</p>
                   {p.variant && <p className="truncate text-xs text-muted-foreground">{p.variant}</p>}
+                  {p.giveaway_coupon && (
+                    <span className="mt-1 w-fit rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">
+                      🎁 Offer · coupon
+                    </span>
+                  )}
                   <p className="mt-1 text-xs text-muted-foreground">
                     {out ? "Out of stock" : `${p.stock} in stock`} · GST {Number(p.gst ?? 0)}%
                   </p>
@@ -559,8 +583,10 @@ function CounterSale() {
       <CustomerDialog open={showCustomer} onOpenChange={setShowCustomer} customers={customers} />
       <InvoiceViewer
         invoice={saleInvoice}
+        coupons={saleCoupons}
         onClose={() => {
           setSaleInvoice(null);
+          setSaleCoupons(null);
           searchRef.current?.focus();
         }}
       />

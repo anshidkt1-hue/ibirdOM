@@ -171,7 +171,8 @@ async function fetchOnlineProducts() {
   const base = () =>
     supabase.from('products').select(CATALOG_FIELDS).eq('active', true).gt('stock', 0).order('name').limit(CATALOG_LIMIT);
 
-  let { data, error } = await base().eq('sales_channel', 'online');
+  // 'both' = sold on WhatsApp and at the counter from the same stock
+  let { data, error } = await base().in('sales_channel', ['online', 'both']);
   if (error && /sales_channel/.test(error.message)) {
     // Channel column not migrated yet: fall back to all active products
     ({ data, error } = await base());
