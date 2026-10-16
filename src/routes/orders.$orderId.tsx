@@ -1,7 +1,8 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ArrowLeft, Printer, Clock, User, Download, FileText, Ticket } from "lucide-react";
+import { ArrowLeft, Printer, Clock, User, Download, Eye, FileText, Ticket } from "lucide-react";
+import { InvoiceViewer } from "@/components/invoice-viewer";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
 import { StatusBadge } from "@/components/status-badge";
@@ -14,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { couponSvgFor, downloadCouponPng, downloadCouponsPdf, downloadInvoicePdf, ensureInvoice, fetchOrderCoupons, fetchOrderInvoice, type Coupon, type CouponArtInput } from "@/lib/documents";
+import { couponSvgFor, downloadCouponPng, downloadCouponsPdf, downloadInvoicePdf, ensureInvoice, fetchOrderCoupons, fetchOrderInvoice, type Coupon, type Invoice, type CouponArtInput } from "@/lib/documents";
 import { fetchSettings, fetchOrder, updateOrderStatus, fetchOrderStatusHistory, fetchOrderAssignmentHistory, fetchEmployees, recordStatusChange, recordAssignmentChange, type OrderStatusHistory, type OrderAssignmentHistory, type Employee } from "@/lib/data";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { useRole } from "@/components/role-provider";
@@ -371,6 +372,7 @@ function InvoiceCard({ orderId, paid }: { orderId: string; paid: boolean }) {
   const queryClient = useQueryClient();
   const { can } = useRole();
   const [busy, setBusy] = useState(false);
+  const [viewing, setViewing] = useState<Invoice | null>(null);
   const { data: invoice, isLoading } = useQuery({
     queryKey: ["order-invoice", orderId],
     queryFn: () => fetchOrderInvoice(orderId),
@@ -407,9 +409,15 @@ function InvoiceCard({ orderId, paid }: { orderId: string; paid: boolean }) {
             Issued {formatDateTime(invoice.issued_at)}
             {invoice.sent_at ? " · sent on WhatsApp" : ""}
           </p>
-          <Button className="mt-3 w-full gap-2" disabled={busy} onClick={download}>
-            <Download className="size-4" /> {busy ? "Preparing PDF…" : "Download invoice PDF"}
-          </Button>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Button variant="outline" className="gap-2" onClick={() => setViewing(invoice)}>
+              <Eye className="size-4" /> View
+            </Button>
+            <Button className="gap-2" disabled={busy} onClick={download}>
+              <Download className="size-4" /> {busy ? "Preparing…" : "Download"}
+            </Button>
+          </div>
+          <InvoiceViewer invoice={viewing} onClose={() => setViewing(null)} />
         </>
       ) : paid ? (
         <>

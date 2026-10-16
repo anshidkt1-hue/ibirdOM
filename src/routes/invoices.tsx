@@ -1,9 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Download, FileText, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Eye, FileText, Search } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
+import { InvoiceViewer } from "@/components/invoice-viewer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -49,6 +50,7 @@ function InvoicesPage() {
   const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<Invoice | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search), 300);
@@ -149,7 +151,10 @@ function InvoicesPage() {
                     </TableCell>
                     <TableCell className="text-right text-muted-foreground">{formatCurrency(inv.tax)}</TableCell>
                     <TableCell className="text-right font-semibold">{formatCurrency(inv.total)}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="whitespace-nowrap text-right">
+                      <Button size="sm" variant="ghost" className="mr-1 gap-1.5" onClick={() => setViewing(inv)}>
+                        <Eye className="size-3.5" /> View
+                      </Button>
                       <Button
                         size="sm"
                         variant="outline"
@@ -199,6 +204,7 @@ function InvoicesPage() {
           </div>
         )}
       </div>
+      <InvoiceViewer invoice={viewing} onClose={() => setViewing(null)} />
     </AppShell>
   );
 }

@@ -192,10 +192,19 @@ function loadInvoiceFonts() {
   return fontsPromise;
 }
 
+async function invoiceDoc(invoice: Invoice) {
+  const [data, fonts, logo] = await Promise.all([invoicePdfData(invoice), loadInvoiceFonts(), loadLogo()]);
+  return buildInvoicePdf(data, { fonts, logo });
+}
+
 export async function downloadInvoicePdf(invoice: Invoice) {
-  const [data, fonts] = await Promise.all([invoicePdfData(invoice), loadInvoiceFonts()]);
-  const logo = await loadLogo();
-  buildInvoicePdf(data, { fonts, logo }).save(invoiceFileName(invoice.invoice_number));
+  (await invoiceDoc(invoice)).save(invoiceFileName(invoice.invoice_number));
+}
+
+// Blob URL of the invoice PDF for viewing in the page; the caller revokes it when done
+export async function invoicePdfUrl(invoice: Invoice) {
+  const blob = (await invoiceDoc(invoice)).output("blob");
+  return URL.createObjectURL(blob);
 }
 
 // ---------- Coupons ----------
