@@ -100,6 +100,7 @@ type ProductFormData = {
   gst: number;
   sales_channel: SalesChannel;
   giveaway_coupon: boolean;
+  active: boolean;
   image_url?: string;
 };
 
@@ -128,6 +129,7 @@ function InventoryPage() {
 
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
+  const [status, setStatus] = useState<"active" | "inactive" | "all">("active");
   const [tab, setTab] = useState<string>("online");
   const tabChannel: SalesChannel = tab === "counter" ? "counter" : "online";
   const [target, setTarget] = useState<Product | null>(null);
@@ -156,6 +158,7 @@ function InventoryPage() {
     gst: 5,
     sales_channel: "online",
     giveaway_coupon: false,
+    active: true,
   });
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
 
@@ -171,10 +174,23 @@ function InventoryPage() {
     const q = search.trim().toLowerCase();
     if (q && !p.name.toLowerCase().includes(q) && !p.sku.toLowerCase().includes(q)) return false;
     if (category !== "all" && p.category !== category) return false;
+    if (status !== "all" && (status === "active") !== (p.active !== false)) return false;
     return true;
   });
+  const inactiveCount = products.filter((p) => p.active === false).length;
 
-  const lowStock = products.filter((p) => p.stock <= p.low_stock_threshold);
+  // Quick on/off from the list. Inactive products leave Counter Sale, barcode scanning and the
+  // WhatsApp catalogue; their stock and sales history stay.
+  const setActive = useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) => updateProduct(id, { active }),
+    onSuccess: (p) => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success(`${p.name}${p.variant ? ` ${p.variant}` : ""} is now ${p.active ? "active" : "inactive"}`);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const lowStock = products.filter((p) => p.active !== false && p.stock <= p.low_stock_threshold);
   const stockValue = products.reduce((s, p) => s + Number(p.cost_price) * p.stock, 0);
   const units = products.reduce((s, p) => s + p.stock, 0);
 
@@ -202,7 +218,7 @@ function InventoryPage() {
         stock: Number(formData.stock),
         low_stock_threshold: Number(formData.low_stock_threshold),
         image_url: imageUrl,
-        active: true,
+        active: formData.active,
       };
 
       let savedProduct;
@@ -285,6 +301,7 @@ function InventoryPage() {
       gst: 5,
       sales_channel: tabChannel,
       giveaway_coupon: false,
+      active: true,
     });
     setSelectedImage(null);
     setEditingProduct(null);
@@ -306,6 +323,7 @@ function InventoryPage() {
       gst: Number(product.gst ?? 5),
       sales_channel: channelOf(product),
       giveaway_coupon: Boolean(product.giveaway_coupon),
+      active: product.active !== false,
       ...(product.image_url ? { image_url: product.image_url } : {}),
     });
     setShowProductDialog(true);
@@ -318,7 +336,7 @@ function InventoryPage() {
               ? "Shown to customers in the WhatsApp catalogue. Products marked Both are also sold at the counter from the same stock."
               : "Sold at the counter. Products marked Both are also on WhatsApp and share the same stock."}
           </p>
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-4">
             <div className="relative sm:col-span-2">
               <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -328,6 +346,16 @@ function InventoryPage() {
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
+            <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="active">Active products</SelectItem>
+                <SelectItem value="inactive">Inactive products{inactiveCount ? ` (${inactiveCount})` : ""}</SelectItem>
+                <SelectItem value="all">All products</SelectItem>
+              </SelectContent>
+            </Select>
             <Select value={category} onValueChange={setCategory}>
               <SelectTrigger>
                 <SelectValue />
@@ -351,6 +379,7 @@ function InventoryPage() {
                   <TableHead>SKU / Barcode</TableHead>
                   <TableHead>HSN / GST</TableHead>
                   <TableHead>Category</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead className="text-right">Stock</TableHead>
                   <TableHead className="text-right">Price</TableHead>
                   <TableHead />
@@ -358,7 +387,7 @@ function InventoryPage() {
               </TableHeader>
               <TableBody>
                 {filtered.filter((p) => (channel === "online" ? sellsOnline(p) : sellsAtCounter(p))).map((p) => (
-                  <TableRow key={p.id}>
+                  <TableRow key={p.id} className={p.active === false ? "opacity-60" : undefined}>
                     <TableCell>
                       {p.image_url ? (
                         <img
@@ -400,6 +429,19 @@ function InventoryPage() {
                       <div className="text-muted-foreground">GST: {Number(p.gst ?? 0)}%</div>
                     </TableCell>
                     <TableCell>{p.category}</TableCell>
+                    <TableCell>
+                      <label className="flex w-fit cursor-pointer items-center gap-2" title="Inactive products are hidden from Counter Sale and WhatsApp">
+                        <Switch
+                          checked={p.active !== false}
+                          disabled={!can("edit") || setActive.isPending}
+                          onCheckedChange={(v) => setActive.mutate({ id: p.id, active: v })}
+                          aria-label={p.active !== false ? "Deactivate product" : "Activate product"}
+                        />
+                        <span className={`text-xs font-semibold ${p.active !== false ? "text-success" : "text-muted-foreground"}`}>
+                          {p.active !== false ? "Active" : "Inactive"}
+                        </span>
+                      </label>
+                    </TableCell>
                     <TableCell
                       className={`text-right font-semibold ${
                         p.stock <= p.low_stock_threshold ? "text-destructive" : ""
@@ -472,6 +514,7 @@ function InventoryPage() {
               Price: Number(p.price),
               GST: Number(p.gst ?? 0),
               "Offer coupon": p.giveaway_coupon ? "Yes" : "No",
+              Status: p.active !== false ? "Active" : "Inactive",
             }))}
           />
         </div>
@@ -480,8 +523,8 @@ function InventoryPage() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Products"
-          value={formatNumber(products.length)}
-          hint="Active SKUs"
+          value={formatNumber(products.length - inactiveCount)}
+          hint={inactiveCount ? `Active SKUs · ${inactiveCount} inactive` : "Active SKUs"}
           icon={Package}
         />
         <StatCard
@@ -774,6 +817,20 @@ function InventoryPage() {
                 </p>
               )}
             </div>
+
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-border p-3">
+              <span>
+                <span className="block text-sm font-semibold">Active</span>
+                <span className="block text-xs text-muted-foreground">
+                  Inactive products are hidden from Counter Sale, barcode scanning and the WhatsApp catalogue.
+                  Stock and sales history are kept.
+                </span>
+              </span>
+              <Switch
+                checked={formData.active}
+                onCheckedChange={(v) => setFormData({ ...formData, active: v })}
+              />
+            </label>
 
             <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
               <span>

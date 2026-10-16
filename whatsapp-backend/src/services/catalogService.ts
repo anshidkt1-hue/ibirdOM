@@ -64,6 +64,8 @@ async function runSync(): Promise<SyncResult> {
   const requests: any[] = [];
 
   for (const p of products) {
+    // Inactive products (switched off in Inventory) are removed from the catalog below
+    if (p.active === false) continue;
     // The catalog needs a JPEG/PNG photo; products without one stay out of the catalog.
     if (!SUPPORTED_IMAGE.test(p.image_url || '')) {
       skipped.push(`${p.name}${p.variant ? ` ${p.variant}` : ''}`);
@@ -72,7 +74,7 @@ async function runSync(): Promise<SyncResult> {
     requests.push({ method: 'UPDATE', data: catalogItem(p) });
   }
 
-  // Products deleted from Inventory, moved to the counter, or without a photo are removed.
+  // Products deleted, made inactive or counter-only in Inventory, or without a photo, are removed.
   const keep = new Set(requests.map((r) => r.data.id));
   const stale = (await fetchCatalogRetailerIds()).filter((id) => !keep.has(id));
   for (const id of stale) requests.push({ method: 'DELETE', data: { id } });
