@@ -186,6 +186,8 @@ export type OrderFilters = {
   from?: string;
   to?: string;
   staffId?: string | undefined;
+  // Orders page hides counter sales (they are paid and done at the till; see Invoices)
+  excludeSource?: string | undefined;
 };
 
 function applyOrderFilters(query: any, f: OrderFilters, snapshotIso?: string) {
@@ -199,6 +201,7 @@ function applyOrderFilters(query: any, f: OrderFilters, snapshotIso?: string) {
   }
   if (f.status && f.status !== "all") q = q.eq("status", f.status);
   if (f.source && f.source !== "all") q = q.eq("source", f.source);
+  if (f.excludeSource) q = q.neq("source", f.excludeSource);
   if (f.payment && f.payment !== "all") q = q.eq("payment_method", f.payment);
   if (f.assignedTo && f.assignedTo !== "all") {
     q = f.assignedTo === "unassigned" ? q.is("assigned_to", null) : q.eq("assigned_to", f.assignedTo);

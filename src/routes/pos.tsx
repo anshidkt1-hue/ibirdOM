@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -49,6 +49,8 @@ import {
 } from "@/lib/pos-store";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { useRole } from "@/components/role-provider";
+import { InvoiceViewer } from "@/components/invoice-viewer";
+import { ensureInvoice, type Invoice } from "@/lib/documents";
 
 export const Route = createFileRoute("/pos")({
   head: () => ({
@@ -95,7 +97,6 @@ function discountAmountOf(draft: PosDraft, subtotal: number) {
 }
 
 function CounterSale() {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { can } = useRole();
   const { draft, held } = usePosStore();
@@ -216,6 +217,8 @@ function CounterSale() {
     setShowHeld(false);
   };
 
+  const [saleInvoice, setSaleInvoice] = useState<Invoice | null>(null);
+
   const checkout = useMutation({
     mutationFn: () => {
       const customer = customers.find((c) => c.id === draft.customerId);
@@ -228,7 +231,8 @@ function CounterSale() {
         customer_name: selectedName ?? "Walk-in customer",
         customer_phone: selectedPhone || null,
         source: "counter",
-        status: "pending",
+        // Paid and handed over at the till, so the sale is complete (counter sales are not in Orders)
+        status: "completed",
         payment_method: draft.payment,
         payment_status: "paid",
         notes: draft.notes || null,
@@ -238,14 +242,21 @@ function CounterSale() {
         discount: discountAmount,
       });
     },
-    onSuccess: (order) => {
+    onSuccess: async (order) => {
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
-      toast.success(`Sale ${order.order_number} recorded`);
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
       resetDraft();
       setSearch("");
-      navigate({ to: "/orders/$orderId", params: { orderId: order.id } });
+      // Show the invoice to print or download; the next bill can start as soon as it is closed
+      try {
+        const invoice = await ensureInvoice(order.id);
+        toast.success(`Sale recorded · invoice ${invoice.invoice_number}`);
+        setSaleInvoice(invoice);
+      } catch {
+        toast.success(`Sale ${order.order_number} recorded`);
+      }
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -546,6 +557,13 @@ function CounterSale() {
       )}
 
       <CustomerDialog open={showCustomer} onOpenChange={setShowCustomer} customers={customers} />
+      <InvoiceViewer
+        invoice={saleInvoice}
+        onClose={() => {
+          setSaleInvoice(null);
+          searchRef.current?.focus();
+        }}
+      />
 
       <Dialog open={showHeld} onOpenChange={setShowHeld}>
         <DialogContent>

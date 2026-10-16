@@ -7,7 +7,6 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Loader2,
-  Plus,
   Search,
   User,
   X,
@@ -72,7 +71,7 @@ export const Route = createFileRoute("/orders/")({
       {
         name: "description",
         content:
-          "View, filter and process every ibird order from WhatsApp and the counter with bulk actions and exports.",
+          "View, filter and process ibird WhatsApp orders with bulk actions and exports.",
       },
       { property: "og:title", content: "Orders — ibird Order Management" },
       {
@@ -201,6 +200,7 @@ function OrdersPage() {
       search: debouncedSearch,
       status,
       source,
+      excludeSource: "counter",
       payment,
       assignedTo,
       from,
@@ -419,17 +419,10 @@ function OrdersPage() {
   return (
     <AppShell
       title="Orders"
-      subtitle="Orders from WhatsApp and the counter."
+      subtitle="WhatsApp orders to pack and deliver. Counter sales are in Invoices."
       actions={
         <>
           <ScopedExportMenu scopes={exportScopes} filename="ibird-orders" title="Orders" />
-          {can("edit") && (
-            <Button asChild className="gap-2">
-              <Link to="/pos">
-                <Plus className="size-4" /> New Counter Sale
-              </Link>
-            </Button>
-          )}
         </>
       }
     >
@@ -465,7 +458,6 @@ function OrdersPage() {
               <SelectContent>
                 <SelectItem value="all">All channels</SelectItem>
                 <SelectItem value="whatsapp">WhatsApp</SelectItem>
-                <SelectItem value="counter">Counter</SelectItem>
                 <SelectItem value="walk-in">Walk-in</SelectItem>
                 <SelectItem value="manual">Manual</SelectItem>
               </SelectContent>
