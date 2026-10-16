@@ -314,7 +314,7 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
   const totLine = r2(data.items.reduce((s, i) => s + Number(i.line_total), 0));
   const totTax = r2(data.items.reduce((s, i) => s + lineTax(i), 0));
 
-  // Column widths add up to the content width (182 mm); headers align like their values
+  // Column widths add up to the content width (182 mm)
   const COLS = [
     { head: "No", w: 11, align: "center" },
     { head: "Item", w: 59, align: "left" },
@@ -379,7 +379,8 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
     },
     didParseCell: (hook) => {
       const col = COLS[hook.column.index]!;
-      hook.cell.styles.halign = col.align;
+      // Column titles are centred; values keep their own alignment (text left, numbers right)
+      hook.cell.styles.halign = hook.section === "head" ? "center" : col.align;
       // TOTAL lines up with the product names
       if (hook.section === "foot" && hook.column.index === 1) {
         hook.cell.styles.cellPadding = { top: 2.5, bottom: 2.5, left: itemTextX, right: CELL_X };
