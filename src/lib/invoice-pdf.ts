@@ -274,8 +274,6 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
     Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const lineTax = (i: InvoicePdfData["items"][number]) =>
     i.tax_amount != null ? Number(i.tax_amount) : r2((Number(i.line_total) * Number(i.tax_rate ?? 0)) / 100);
-  const rates = [...new Set(data.items.map((i) => Number(i.tax_rate ?? 0)))];
-  const oneRate = rates.length === 1;
   const totQty = data.items.reduce((s, i) => s + Number(i.quantity), 0);
   const totLine = r2(data.items.reduce((s, i) => s + Number(i.line_total), 0));
   const totTax = r2(data.items.reduce((s, i) => s + lineTax(i), 0));
@@ -283,7 +281,7 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
   const PHOTO = 13;
   const hasPhotos = data.items.some((i) => i.image);
   const textX = hasPhotos ? PHOTO + 5 : 3;
-  const itemW = 64;
+  const itemW = 58;
   const nameLines = (i: InvoicePdfData["items"][number]) => {
     font("semibold", 8.5, INK);
     return doc.splitTextToSize(i.name, itemW - textX - 2) as string[];
@@ -294,7 +292,8 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
   autoTable(doc, {
     startY: y,
     margin: { left: M, right: M, top: 16, bottom: 20 },
-    head: [["No", "Item", "Qty/Nos", "Rate", "Total", oneRate ? `Tax ${rates[0]}%` : "Tax (GST)", "Total Value"]],
+    // GST is per product (from Inventory at the time of sale), so every row carries its own rate
+    head: [["No", "Item", "Qty", "Rate", "Total", "GST %", "GST Amt", "Total Value"]],
     body: data.items.map((i, idx) => {
       const tax = lineTax(i);
       return [
@@ -303,11 +302,12 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
         String(i.quantity),
         amt(i.unit_price),
         amt(i.line_total),
-        oneRate ? amt(tax) : `${amt(tax)}\n(${Number(i.tax_rate ?? 0)}%)`,
+        `${Number(i.tax_rate ?? 0)}%`,
+        amt(tax),
         amt(Number(i.line_total) + tax),
       ];
     }),
-    foot: [["", "Total", String(totQty), "", amt(totLine), amt(totTax), amt(totLine + totTax)]],
+    foot: [["", "Total", String(totQty), "", amt(totLine), "", amt(totTax), amt(totLine + totTax)]],
     showFoot: "lastPage",
     theme: "grid",
     styles: {
@@ -326,11 +326,12 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
     columnStyles: {
       0: { cellWidth: 10, halign: "center" },
       1: { cellWidth: itemW, halign: "left" },
-      2: { cellWidth: 16, halign: "center" },
-      3: { cellWidth: 22 },
-      4: { cellWidth: 24 },
-      5: { cellWidth: 22 },
-      6: { cellWidth: 24, fontStyle: "semibold" as any },
+      2: { cellWidth: 14, halign: "center" },
+      3: { cellWidth: 21 },
+      4: { cellWidth: 22 },
+      5: { cellWidth: 13, halign: "center" },
+      6: { cellWidth: 21 },
+      7: { cellWidth: 23, fontStyle: "semibold" as any },
     },
     willDrawPage: (hook) => {
       if (hook.pageNumber > 1) pageBackground();
@@ -409,8 +410,21 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
   font("normal", 8, INK);
   doc.text(amountInWords(data.total), M + 30, y + 6);
   font("normal", 7.5, MUTED);
-  doc.text(`GST included: CGST ${rupee}${amt(data.tax / 2)}  +  SGST ${rupee}${amt(data.tax / 2)}`, M, y + 11);
-  y += 14;
+  // GST by rate, each split equally into CGST and SGST (intra-state supply)
+  const byRate = new Map<number, { taxable: number; tax: number }>();
+  for (const i of data.items) {
+    const rate = Number(i.tax_rate ?? 0);
+    const cur = byRate.get(rate) ?? { taxable: 0, tax: 0 };
+    cur.taxable += Number(i.line_total);
+    cur.tax += lineTax(i);
+    byRate.set(rate, cur);
+  }
+  const breakdown = [...byRate.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([rate, v]) => `GST ${rate}% on ${rupee}${amt(v.taxable)}: CGST ${rupee}${amt(v.tax / 2)} + SGST ${rupee}${amt(v.tax / 2)}`)
+;
+  doc.text(breakdown, M, y + 11);
+  y += 10 + breakdown.length * 3.6;
 
   // ---------- Invoice note ----------
   // Notes and footer sit at the bottom of the page, like the printed bill
