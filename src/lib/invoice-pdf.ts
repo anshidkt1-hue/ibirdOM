@@ -3,6 +3,7 @@
 // src/lib/invoice-pdf.ts and whatsapp-backend/src/lib/invoice-pdf.ts identical.
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { INVOICE_ICONS, type InvoiceIcon } from "./invoice-icons";
 
 export type InvoiceSeller = {
   name?: string | null | undefined;
@@ -112,10 +113,12 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
   const M = 14;
+  const CW = W - 2 * M;
+  const PAD = 6; // inner padding of every panel
   const seller = data.seller || {};
   const store = seller.name || "ibird";
 
-  // Fonts
+  // ---------- Fonts and drawing helpers ----------
   const fonts = options.fonts;
   const F = fonts ? "Poppins" : "helvetica";
   if (fonts) {
@@ -129,162 +132,208 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
     doc.setFontSize(size);
     doc.setTextColor(...color);
   };
-  const rupee = fonts ? "₹" : "Rs.";
-  // jsPDF centring ignores letter spacing, so spaced text is centred by hand
-  const centred = (text: string, cx: number, ty: number, charSpace: number) => {
-    const w = doc.getTextWidth(text) + charSpace * (text.length - 1);
-    doc.text(text, cx - w / 2, ty, { charSpace });
+  const serif = (size: number, color: RGB) => {
+    doc.setFont("times", "bold");
+    doc.setFontSize(size);
+    doc.setTextColor(...color);
   };
-
+  const rupee = fonts ? "₹" : "Rs.";
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const amt = (n: number) =>
+    Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Width of text with letter spacing (jsPDF alignment ignores charSpace)
+  const spacedWidth = (text: string, cs: number) => doc.getTextWidth(text) + cs * (text.length - 1);
+  const spaced = (text: string, x: number, y: number, cs: number, align: "left" | "center" | "right" = "left") => {
+    const w = spacedWidth(text, cs);
+    doc.text(text, align === "left" ? x : align === "center" ? x - w / 2 : x - w, y, { charSpace: cs });
+  };
+  // Baseline that vertically centres a single text line in a box (cap height ≈ 0.7 em)
+  const mid = (top: number, height: number, size: number) => top + height / 2 + (size * 0.3528 * 0.7) / 2;
+  const icon = (key: InvoiceIcon, x: number, y: number, s: number) => {
+    try {
+      doc.addImage(INVOICE_ICONS[key], "PNG", x, y, s, s, undefined, "FAST");
+    } catch {
+      /* icons are decorative */
+    }
+  };
   const pageBackground = () => {
     doc.setFillColor(...PAGE_BG);
     doc.rect(0, 0, W, H, "F");
   };
-  const panel = (x: number, y: number, w: number, h: number, fill: RGB = WHITE) => {
-    doc.setFillColor(...fill);
+  const panel = (x: number, y: number, w: number, h: number) => {
+    doc.setFillColor(...WHITE);
     doc.setDrawColor(...LINE);
-    doc.setLineWidth(0.35);
+    doc.setLineWidth(0.3);
     doc.roundedRect(x, y, w, h, 3, 3, "FD");
   };
-  const iconSquare = (x: number, y: number, s: number, kind: "doc" | "person") => {
-    doc.setDrawColor(...RED);
-    doc.setLineWidth(0.4);
+  const iconTile = (key: InvoiceIcon, x: number, y: number, s: number) => {
     doc.setFillColor(...WHITE);
-    doc.roundedRect(x, y, s, s, 1.8, 1.8, "FD");
-    const cx = x + s / 2;
-    const cy = y + s / 2;
-    doc.setLineWidth(0.35);
-    if (kind === "doc") {
-      doc.roundedRect(cx - s * 0.18, cy - s * 0.24, s * 0.36, s * 0.48, 0.6, 0.6, "S");
-      doc.line(cx - s * 0.09, cy + s * 0.02, cx - s * 0.02, cy + s * 0.09);
-      doc.line(cx - s * 0.02, cy + s * 0.09, cx + s * 0.1, cy - s * 0.05);
-    } else {
-      doc.circle(cx, cy - s * 0.1, s * 0.12, "S");
-      doc.ellipse(cx, cy + s * 0.2, s * 0.22, s * 0.1, "S");
-    }
+    doc.setDrawColor(...RED);
+    doc.setLineWidth(0.45);
+    doc.roundedRect(x, y, s, s, 2.2, 2.2, "FD");
+    icon(key, x + s * 0.22, y + s * 0.22, s * 0.56);
   };
 
   pageBackground();
 
-  // ---------- Header ----------
+  // ---------- Header: logo | HOME APPLIANCES + GSTIN | contact ----------
+  const logoH = 24;
   if (options.logo) {
     try {
-      doc.addImage(options.logo, "PNG", M, 8, 34, 24.3, undefined, "FAST");
+      doc.addImage(options.logo, "PNG", M, 9, logoH * (640 / 458), logoH, undefined, "FAST");
     } catch {
-      /* fall back to the drawn mark below */
+      font("bold", 26, NAVY);
+      doc.text(store, M, 28);
     }
   } else {
-    // Drawn mark: red bird above the navy wordmark
-    doc.setFillColor(...RED);
-    doc.triangle(M + 13, 17, M + 25, 9.5, M + 22, 17, "F");
-    doc.triangle(M + 18, 17, M + 33, 12, M + 25, 18, "F");
-    doc.circle(M + 25.5, 15.8, 2.3, "F");
-    doc.triangle(M + 27.5, 15, M + 31, 15.6, M + 27.5, 16.6, "F");
     font("bold", 26, NAVY);
-    doc.text(store.toLowerCase() === "ibird" ? "ibird" : store, M, 30);
+    doc.text(store, M, 28);
   }
+  const brandX = M + logoH * (640 / 458) + 6;
+  doc.setDrawColor(...LINE);
+  doc.setLineWidth(0.4);
+  doc.line(brandX, 12, brandX, 31);
 
-  const tagline = (seller.tagline || "Kitchen Appliances").toUpperCase();
-  font("semibold", 8.5, RED);
-  doc.text(`—  ${tagline}  —`, 66, 18, { charSpace: 0.9 });
+  const tagX = brandX + 6;
+  font("semibold", 10, RED);
+  spaced((seller.tagline || "Home Appliances").toUpperCase(), tagX, 19.5, 1.4);
   if (seller.gstin) {
-    font("normal", 7.5, INK);
-    doc.text("GSTIN:", 66, 25);
-    font("bold", 7.5, NAVY);
-    doc.text(seller.gstin, 66 + doc.getTextWidth("GSTIN: ") + 0.5, 25);
-  }
-
-  // Contact column with red round markers
-  const contact: string[][] = [];
-  if (seller.phone) contact.push([seller.phone]);
-  if (seller.email) contact.push([seller.email]);
-  else if (seller.website) contact.push([seller.website]);
-  font("normal", 7.5, INK);
-  if (seller.address) contact.push(doc.splitTextToSize(seller.address, 52));
-  let cy = 12;
-  for (const lines of contact) {
-    doc.setFillColor(...RED);
-    doc.circle(143, cy - 1, 2.4, "F");
-    doc.setFillColor(...WHITE);
-    doc.circle(143, cy - 1, 0.8, "F");
-    font("normal", 7.5, INK);
-    doc.text(lines, 148, cy);
-    cy += 4 * lines.length + 3.5;
-  }
-  const headerBottom = Math.max(38, cy - 2);
-  doc.setFillColor(...RED);
-  doc.rect(0, headerBottom, W, 1.3, "F");
-
-  // ---------- Invoice title + bill no / date ----------
-  let y = headerBottom + 6;
-  panel(M, y, W - 2 * M, 26);
-  iconSquare(M + 6, y + 7, 12, "doc");
-  font("bold", 24, NAVY);
-  doc.text("INVOICE", M + 24, y + 16.5, { charSpace: 1.6 });
-  font("normal", 7.5, MUTED);
-  doc.text(data.channel === "whatsapp" ? `WhatsApp order ${data.order_number}` : `Counter sale ${data.order_number}`, M + 24, y + 21.5);
-
-  const metaRow = (label: string, value: string, ry: number) => {
-    doc.setFillColor(...RED);
-    doc.roundedRect(122, ry, 30, 8, 1.2, 1.2, "F");
-    font("bold", 7.5, WHITE);
-    doc.text(label, 125, ry + 5.3);
+    font("bold", 7, RED);
+    const labelW = doc.getTextWidth("GSTIN");
+    font("semibold", 7.5, NAVY);
+    const valueW = doc.getTextWidth(seller.gstin);
+    const pillW = 3 + labelW + 3 + valueW + 3;
     doc.setFillColor(...LAVENDER);
     doc.setDrawColor(...LINE);
-    doc.roundedRect(152, ry, W - M - 4 - 152, 8, 1.2, 1.2, "FD");
-    font("medium", 8, NAVY);
-    doc.text(value, 156, ry + 5.3);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(tagX, 23.5, pillW, 7, 1.6, 1.6, "FD");
+    font("bold", 7, RED);
+    doc.text("GSTIN", tagX + 3, mid(23.5, 7, 7.5));
+    font("semibold", 7.5, NAVY);
+    doc.text(seller.gstin, tagX + 3 + labelW + 3, mid(23.5, 7, 7.5));
+  }
+
+  const contactX = 132;
+  const contactTextX = contactX + 8.5;
+  const contactW = W - M - contactTextX;
+  const contacts: [InvoiceIcon, string[]][] = [];
+  font("normal", 7.5, INK);
+  if (seller.phone) contacts.push(["circle_phone", [seller.phone]]);
+  if (seller.email) contacts.push(["circle_atSign", [seller.email]]);
+  if (seller.address) contacts.push(["circle_mapPin", doc.splitTextToSize(seller.address, contactW)]);
+  let cy = 9;
+  for (const [key, lines] of contacts) {
+    icon(key, contactX, cy, 6);
+    font("normal", 7.5, INK);
+    doc.text(lines, contactTextX, mid(cy, 6, 7.5), { lineHeightFactor: 1.35 });
+    cy += Math.max(6, 6 + (lines.length - 1) * 3.6) + 1.8;
+  }
+  const headerBottom = Math.max(38, cy + 1);
+  doc.setFillColor(...RED);
+  doc.rect(0, headerBottom, W, 1.2, "F");
+
+  // ---------- Title: INVOICE + bill no / date ----------
+  let y = headerBottom + 5;
+  const titleH = 24;
+  panel(M, y, CW, titleH);
+  iconTile("red_fileCheckCorner", M + PAD, y + 5, 14);
+  font("bold", 24, NAVY);
+  spaced("INVOICE", M + PAD + 14 + 6, y + 13.8, 1.6);
+  font("normal", 7.5, MUTED);
+  doc.text(
+    `${data.channel === "whatsapp" ? "WhatsApp order" : "Counter sale"}  ·  ${data.order_number}`,
+    M + PAD + 14 + 6.3,
+    y + 19.4,
+  );
+
+  const metaX = W - M - PAD - 78;
+  const labelW = 26;
+  const metaRow = (label: string, value: string, ry: number) => {
+    doc.setFillColor(...LAVENDER);
+    doc.setDrawColor(...LINE);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(metaX, ry, 78, 7.5, 1.6, 1.6, "FD");
+    doc.setFillColor(...RED);
+    doc.roundedRect(metaX, ry, labelW, 7.5, 1.6, 1.6, "F");
+    doc.rect(metaX + labelW - 2, ry, 2, 7.5, "F");
+    font("bold", 7.5, WHITE);
+    spaced(label, metaX + 3.5, mid(ry, 7.5, 7.5), 0.4);
+    font("semibold", 8.5, NAVY);
+    doc.text(value, metaX + labelW + 4, mid(ry, 7.5, 8.5));
   };
-  metaRow("BILL NO.", data.invoice_number, y + 4);
-  metaRow("DATE", formatDate(data.issued_at), y + 14);
-  y += 30;
+  metaRow("BILL NO.", data.invoice_number, y + 3.5);
+  metaRow("DATE", formatDate(data.issued_at), y + 13);
+  y += titleH + 4;
 
   // ---------- Bill to ----------
-  font("normal", 7.5, MUTED);
-  const toLines = [
-    ...(data.customer_phone ? [`Phone: ${data.customer_phone}`] : []),
-    ...(data.billing_address ? doc.splitTextToSize(data.billing_address, 100) : []),
-  ];
-  const toH = Math.max(18, 14 + toLines.length * 3.8);
-  panel(M, y, W - 2 * M, toH);
-  iconSquare(M + 6, y + 4, 10, "person");
-  font("semibold", 7.5, RED);
-  doc.text("To", M + 21, y + 7.5);
-  font("bold", 11, NAVY);
-  doc.text(data.customer_name || "Walk-in Customer", M + 21, y + 13);
-  if (toLines.length) {
-    font("normal", 7.5, MUTED);
-    doc.text(toLines, M + 21, y + 17.2);
+  const toTextX = M + PAD + 12 + 6;
+  font("normal", 7.5, INK);
+  const addressLines: string[] = data.billing_address ? doc.splitTextToSize(data.billing_address, 92) : [];
+  const detailRows = (data.customer_phone ? 1 : 0) + addressLines.length;
+  const toH = Math.max(22, 5 + 4 + 6 + detailRows * 4.4 + 4);
+  panel(M, y, CW, toH);
+  iconTile("red_userRound", M + PAD, y + (toH - 12) / 2, 12);
+  font("semibold", 7, RED);
+  spaced("BILL TO", toTextX, y + 7.4, 0.8);
+  font("bold", 11.5, NAVY);
+  doc.text(data.customer_name || "Walk-in Customer", toTextX, y + 13.6);
+  let ry = y + 18.6;
+  if (data.customer_phone) {
+    icon("red_phone", toTextX, ry - 2.7, 3.3);
+    font("normal", 7.5, INK);
+    doc.text(data.customer_phone, toTextX + 5, ry);
+    ry += 4.4;
   }
-  // Channel / payment badge in place of the sample's red button
-  const badge = data.channel === "whatsapp" ? "WHATSAPP ORDER" : "COUNTER SALE";
+  if (addressLines.length) {
+    icon("red_mapPin", toTextX, ry - 2.7, 3.3);
+    font("normal", 7.5, INK);
+    doc.text(addressLines, toTextX + 5, ry, { lineHeightFactor: 1.5 });
+  }
+  // Channel pill and payment method, centred vertically on the right
+  const pillW = 48;
+  const pillH = 10;
+  const pillX = W - M - PAD - pillW;
+  const pillY = y + (toH - pillH) / 2 - (data.payment_method ? 2.4 : 0);
   doc.setFillColor(...RED);
-  doc.roundedRect(W - M - 46, y + 4, 40, 10, 2, 2, "F");
-  font("bold", 8.5, WHITE);
-  centred(badge, W - M - 26, y + 10.4, 0.5);
+  doc.roundedRect(pillX, pillY, pillW, pillH, 2.2, 2.2, "F");
+  const pillText = data.channel === "whatsapp" ? "WHATSAPP ORDER" : "COUNTER SALE";
+  font("bold", 8, WHITE);
+  const pillContentW = 4.4 + 2 + spacedWidth(pillText, 0.4);
+  const pillStart = pillX + (pillW - pillContentW) / 2;
+  icon(data.channel === "whatsapp" ? "white_messageCircle" : "white_receipt", pillStart, pillY + (pillH - 4.4) / 2, 4.4);
+  spaced(pillText, pillStart + 6.4, mid(pillY, pillH, 8), 0.4);
   if (data.payment_method) {
     font("medium", 7, MUTED);
-    doc.text(`Paid by ${data.payment_method.toUpperCase()}`, W - M - 26, y + 17, { align: "center" });
+    doc.text(`Paid by ${data.payment_method.toUpperCase()}`, pillX + pillW / 2, pillY + pillH + 4.2, { align: "center" });
   }
-  y += toH + 5;
+  y += toH + 4;
 
   // ---------- Items: per-product GST and product photo ----------
-  const r2 = (n: number) => Math.round(n * 100) / 100;
-  const amt = (n: number) =>
-    Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const lineTax = (i: InvoicePdfData["items"][number]) =>
     i.tax_amount != null ? Number(i.tax_amount) : r2((Number(i.line_total) * Number(i.tax_rate ?? 0)) / 100);
   const totQty = data.items.reduce((s, i) => s + Number(i.quantity), 0);
   const totLine = r2(data.items.reduce((s, i) => s + Number(i.line_total), 0));
   const totTax = r2(data.items.reduce((s, i) => s + lineTax(i), 0));
 
-  const PHOTO = 13;
+  // Column widths add up to the content width (182 mm); headers align like their values
+  const COLS = [
+    { head: "No", w: 11, align: "center" },
+    { head: "Item", w: 59, align: "left" },
+    { head: "Qty", w: 13, align: "center" },
+    { head: "Rate", w: 21, align: "right" },
+    { head: "Total", w: 22, align: "right" },
+    { head: "GST %", w: 14, align: "center" },
+    { head: "GST Amt", w: 20, align: "right" },
+    { head: "Total Value", w: 22, align: "right" },
+  ] as const;
+  const CELL_X = 3;
+  const PHOTO = 11;
   const hasPhotos = data.items.some((i) => i.image);
-  const textX = hasPhotos ? PHOTO + 5 : 3;
-  const itemW = 58;
+  const itemTextX = hasPhotos ? CELL_X + PHOTO + 3 : CELL_X;
+  const itemTextW = COLS[1].w - itemTextX - CELL_X;
   const nameLines = (i: InvoicePdfData["items"][number]) => {
-    font("semibold", 8.5, INK);
-    return doc.splitTextToSize(i.name, itemW - textX - 2) as string[];
+    font("semibold", 8.5, NAVY);
+    return doc.splitTextToSize(i.name, itemTextW) as string[];
   };
   const detailOf = (i: InvoicePdfData["items"][number]) =>
     [i.hsn ? `HSN ${i.hsn}` : null, i.sku ? `SKU ${i.sku}` : null].filter(Boolean).join("  ·  ");
@@ -292,8 +341,7 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
   autoTable(doc, {
     startY: y,
     margin: { left: M, right: M, top: 16, bottom: 20 },
-    // GST is per product (from Inventory at the time of sale), so every row carries its own rate
-    head: [["No", "Item", "Qty", "Rate", "Total", "GST %", "GST Amt", "Total Value"]],
+    head: [COLS.map((c) => c.head)],
     body: data.items.map((i, idx) => {
       const tax = lineTax(i);
       return [
@@ -307,37 +355,36 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
         amt(Number(i.line_total) + tax),
       ];
     }),
-    foot: [["", "Total", String(totQty), "", amt(totLine), "", amt(totTax), amt(totLine + totTax)]],
+    foot: [["", "TOTAL", String(totQty), "", amt(totLine), "", amt(totTax), amt(totLine + totTax)]],
     showFoot: "lastPage",
     theme: "grid",
     styles: {
       font: F,
       fontSize: 8.3,
       textColor: INK,
-      cellPadding: { top: 2.6, bottom: 2.6, left: 2.2, right: 2.2 },
+      cellPadding: { top: 2.5, bottom: 2.5, left: CELL_X, right: CELL_X },
       lineColor: LINE,
-      lineWidth: 0.25,
+      lineWidth: 0.2,
       valign: "middle",
-      halign: "right",
+      overflow: "linebreak",
     },
-    headStyles: { fillColor: LAVENDER, textColor: NAVY, fontStyle: "semibold" as any, fontSize: 8, halign: "center" },
-    footStyles: { fillColor: LAVENDER, textColor: NAVY, fontStyle: "bold" as any, fontSize: 8.5 },
-    bodyStyles: { fillColor: WHITE, minCellHeight: hasPhotos ? PHOTO + 4 : 11 },
-    columnStyles: {
-      0: { cellWidth: 10, halign: "center" },
-      1: { cellWidth: itemW, halign: "left" },
-      2: { cellWidth: 14, halign: "center" },
-      3: { cellWidth: 21 },
-      4: { cellWidth: 22 },
-      5: { cellWidth: 13, halign: "center" },
-      6: { cellWidth: 21 },
-      7: { cellWidth: 23, fontStyle: "semibold" as any },
-    },
+    headStyles: { fillColor: NAVY, textColor: WHITE, fontStyle: "semibold" as any, fontSize: 7.8, minCellHeight: 9 },
+    footStyles: { fillColor: LAVENDER, textColor: NAVY, fontStyle: "bold" as any, fontSize: 8.5, minCellHeight: 9 },
+    bodyStyles: { minCellHeight: hasPhotos ? PHOTO + 5 : 10 },
+    alternateRowStyles: { fillColor: [251, 250, 254] },
+    columnStyles: Object.fromEntries(
+      COLS.map((c, i) => [i, { cellWidth: c.w, halign: c.align, ...(i === 7 ? { fontStyle: "semibold" as any, textColor: NAVY } : {}) }]),
+    ) as any,
     willDrawPage: (hook) => {
       if (hook.pageNumber > 1) pageBackground();
     },
     didParseCell: (hook) => {
-      if (hook.section === "foot" && hook.column.index === 1) hook.cell.styles.halign = "center";
+      const col = COLS[hook.column.index]!;
+      hook.cell.styles.halign = col.align;
+      // TOTAL lines up with the product names
+      if (hook.section === "foot" && hook.column.index === 1) {
+        hook.cell.styles.cellPadding = { top: 2.5, bottom: 2.5, left: itemTextX, right: CELL_X };
+      }
       // The item cell is drawn by hand (photo, name, HSN/SKU); reserve its height with blank lines
       if (hook.section === "body" && hook.column.index === 1) {
         const item = data.items[hook.row.index]!;
@@ -349,7 +396,7 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
       const item = data.items[hook.row.index]!;
       const c = hook.cell;
       if (item.image) {
-        const px = c.x + 2;
+        const px = c.x + CELL_X;
         const py = c.y + (c.height - PHOTO) / 2;
         try {
           const fmt = /^data:image\/png/i.test(item.image) ? "PNG" : "JPEG";
@@ -360,57 +407,85 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
         }
         doc.setDrawColor(...LINE);
         doc.setLineWidth(0.25);
-        doc.roundedRect(px, py, PHOTO, PHOTO, 1, 1, "S");
+        doc.roundedRect(px, py, PHOTO, PHOTO, 1.2, 1.2, "S");
       }
       const lines = nameLines(item);
       const detail = detailOf(item);
-      const blockH = lines.length * 3.6 + (detail ? 3.4 : 0);
-      let ty = c.y + (c.height - blockH) / 2 + 2.8;
-      font("semibold", 8.5, INK);
-      doc.text(lines, c.x + textX, ty);
-      ty += lines.length * 3.6;
+      const LINE_H = 3.6;
+      const blockH = lines.length * LINE_H + (detail ? 3.4 : 0);
+      let ty = c.y + (c.height - blockH) / 2 + 2.7;
+      font("semibold", 8.5, NAVY);
+      doc.text(lines, c.x + itemTextX, ty, { lineHeightFactor: 1.2 });
+      ty += lines.length * LINE_H;
       if (detail) {
         font("normal", 6.6, MUTED);
-        doc.text(detail, c.x + textX, ty);
+        doc.text(detail, c.x + itemTextX, ty + 0.4);
       }
     },
   });
 
   y = (doc as any).lastAutoTable.finalY as number;
-  const NOTES_H = 46;
-  const FOOTER_H = 34;
-  const SUMMARY_H = (data.discount > 0 ? 8 : 0) + 12 + 14;
-  if (y + SUMMARY_H + 6 + NOTES_H + 6 + FOOTER_H > H) {
+  const NOTES_H = 36;
+  const FOOTER_H = 30;
+  const rateRows = new Set(data.items.map((i) => Number(i.tax_rate ?? 0))).size;
+  const SUMMARY_H = Math.max(26, PAD + 7.6 + rateRows * 4.6 + PAD);
+  const bandBlock = (data.discount > 0 ? 8 : 0) + 11;
+  // Keep the totals with the table when they fit; only the notes move to the next page
+  if (y + bandBlock + 4 + SUMMARY_H > H - FOOTER_H - 4) {
     doc.addPage();
     pageBackground();
     y = 16;
   }
 
   // Discount (shared across the lines before GST), then the grand total band
+  const valueColX = W - M - COLS[7].w;
   if (data.discount > 0) {
     doc.setFillColor(...WHITE);
     doc.setDrawColor(...LINE);
-    doc.setLineWidth(0.25);
-    doc.rect(M, y, W - 2 * M, 8, "FD");
-    font("medium", 8, NAVY);
-    doc.text("DISCOUNT", W - M - 40, y + 5.3, { align: "right" });
-    font("semibold", 8.5, INK);
-    doc.text(`- ${amt(data.discount)}`, W - M - 2.2, y + 5.3, { align: "right" });
+    doc.setLineWidth(0.2);
+    doc.rect(M, y, CW, 8, "FD");
+    font("semibold", 8, NAVY);
+    doc.text("DISCOUNT", valueColX - 4, mid(y, 8, 8), { align: "right" });
+    doc.text(`- ${amt(data.discount)}`, W - M - CELL_X, mid(y, 8, 8), { align: "right" });
     y += 8;
   }
   doc.setFillColor(...RED);
-  doc.rect(M, y, W - 2 * M, 11, "F");
-  font("bold", 10, WHITE);
-  doc.text("GRAND TOTAL (INVOICE)", W - M - 40, y + 7.2, { align: "right", charSpace: 0.4 });
-  doc.text(`${rupee}${amt(data.total)}`, W - M - 2.2, y + 7.2, { align: "right" });
-  y += 11;
+  doc.roundedRect(M, y, CW, 11, 2.5, 2.5, "F");
+  doc.rect(M, y, CW, 5, "F");
+  font("bold", 9.5, WHITE);
+  spaced("GRAND TOTAL (INVOICE)", valueColX - 4, mid(y, 11, 9.5), 0.6, "right");
+  font("bold", 10.5, WHITE);
+  doc.text(`${rupee}${amt(data.total)}`, W - M - CELL_X, mid(y, 11, 10.5), { align: "right" });
+  y += 11 + 4;
 
-  font("semibold", 7.5, RED);
-  doc.text("AMOUNT IN WORDS", M, y + 6);
-  font("normal", 8, INK);
-  doc.text(amountInWords(data.total), M + 30, y + 6);
-  font("normal", 7.5, MUTED);
-  // GST by rate, each split equally into CGST and SGST (intra-state supply)
+  // ---------- Amount in words | GST summary by rate ----------
+  const leftW = 92;
+  const rightX = M + leftW + 4;
+  const rightW = CW - leftW - 4;
+  panel(M, y, leftW, SUMMARY_H);
+  font("semibold", 7, RED);
+  spaced("AMOUNT IN WORDS", M + PAD, y + PAD + 2.4, 0.6);
+  font("medium", 8.5, NAVY);
+  doc.text(doc.splitTextToSize(amountInWords(data.total), leftW - 2 * PAD), M + PAD, y + PAD + 8, { lineHeightFactor: 1.35 });
+
+  panel(rightX, y, rightW, SUMMARY_H);
+  font("semibold", 7, RED);
+  spaced("GST SUMMARY", rightX + PAD, y + PAD + 2.4, 0.6);
+  const gx = {
+    rate: rightX + PAD,
+    taxable: rightX + PAD + 33,
+    cgst: rightX + rightW - PAD - 20,
+    sgst: rightX + rightW - PAD,
+  };
+  font("medium", 6.6, MUTED);
+  let gy = y + PAD + 7.6;
+  doc.text("Rate", gx.rate, gy);
+  doc.text("Taxable", gx.taxable, gy, { align: "right" });
+  doc.text("CGST", gx.cgst, gy, { align: "right" });
+  doc.text("SGST", gx.sgst, gy, { align: "right" });
+  doc.setDrawColor(...LINE);
+  doc.setLineWidth(0.2);
+  doc.line(rightX + PAD, gy + 1.4, rightX + rightW - PAD, gy + 1.4);
   const byRate = new Map<number, { taxable: number; tax: number }>();
   for (const i of data.items) {
     const rate = Number(i.tax_rate ?? 0);
@@ -419,97 +494,79 @@ export function buildInvoicePdf(data: InvoicePdfData, options: InvoicePdfOptions
     cur.tax += lineTax(i);
     byRate.set(rate, cur);
   }
-  const breakdown = [...byRate.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([rate, v]) => `GST ${rate}% on ${rupee}${amt(v.taxable)}: CGST ${rupee}${amt(v.tax / 2)} + SGST ${rupee}${amt(v.tax / 2)}`)
-;
-  doc.text(breakdown, M, y + 11);
-  y += 10 + breakdown.length * 3.6;
+  font("normal", 7.5, INK);
+  for (const [rate, v] of [...byRate.entries()].sort((a, b) => a[0] - b[0])) {
+    gy += 4.6;
+    doc.text(`${rate}%`, gx.rate, gy);
+    doc.text(amt(v.taxable), gx.taxable, gy, { align: "right" });
+    doc.text(amt(v.tax / 2), gx.cgst, gy, { align: "right" });
+    doc.text(amt(v.tax / 2), gx.sgst, gy, { align: "right" });
+  }
+  y += SUMMARY_H + 4;
 
-  // ---------- Invoice note ----------
-  // Notes and footer sit at the bottom of the page, like the printed bill
-  const notesTop = Math.max(y, H - FOOTER_H - 6 - NOTES_H);
-  panel(M, notesTop, W - 2 * M, NOTES_H);
+  // ---------- Invoice note | prepared by (sits at the bottom of the page) ----------
+  if (y + NOTES_H > H - FOOTER_H - 4) {
+    doc.addPage();
+    pageBackground();
+    y = 16;
+  }
+  const notesTop = Math.max(y, H - FOOTER_H - 4 - NOTES_H);
+  panel(M, notesTop, CW, NOTES_H);
+  const dividerX = W - M - 56;
   font("bold", 8.5, RED);
-  doc.text("INVOICE NOTE:", M + 5, notesTop + 7);
-  font("normal", 7, INK);
+  spaced("INVOICE NOTE", M + PAD, notesTop + 5 + 2.8, 0.6);
+  font("normal", 6.9, INK);
   DEFAULT_NOTES(store).forEach((note, i) => {
-    const ny = notesTop + 12 + i * 3.9;
-    doc.setFillColor(...INK);
-    doc.circle(M + 6, ny - 0.9, 0.5, "F");
-    doc.text(note, M + 8.5, ny);
-  });
-  font("bold", 7, RED);
-  doc.text("PREPARED BY", W - M - 50, notesTop + 7);
-  font("bold", 11, NAVY);
-  doc.text(store.toUpperCase(), W - M - 50, notesTop + 13, { charSpace: 0.8 });
-  font("normal", 7, MUTED);
-  doc.text(formatDate(data.issued_at), W - M - 50, notesTop + 17.5);
-  doc.text("Computer-generated invoice;", W - M - 50, notesTop + 37);
-  doc.text("no signature required.", W - M - 50, notesTop + 40.5);
-
-  // ---------- Footer ----------
-  const fy = H - FOOTER_H;
-  panel(M, fy, W - 2 * M, 10);
-  doc.setFont("times", "bold");
-  doc.setFontSize(9);
-  doc.setTextColor(...NAVY);
-  centred("QUALITY APPLIANCES   •   RELIABLE PERFORMANCE   •   FOR YOUR KITCHEN", W / 2, fy + 6.6, 0.6);
-
-  const badges: [string, string, "shield" | "wrench" | "truck" | "star"][] = [
-    ["MANUFACTURER", "WARRANTY", "shield"],
-    ["AFTER-SALES", "SERVICE", "wrench"],
-    ["FAST", "DELIVERY", "truck"],
-    ["QUALITY", "YOU CAN TRUST", "star"],
-  ];
-  const colW = (W - 2 * M) / 4;
-  badges.forEach(([top, bottom, icon], i) => {
-    const bx = M + i * colW + 6;
-    const by = fy + 21;
+    const ny = notesTop + 5 + 8.4 + i * 3.75;
     doc.setFillColor(...RED);
-    doc.circle(bx, by, 4.6, "F");
-    doc.setDrawColor(...WHITE);
-    doc.setFillColor(...WHITE);
-    doc.setLineWidth(0.5);
-    if (icon === "shield") {
-      doc.lines([[2.4, 0.9], [0, 1.8], [-2.4, 2.2], [-2.4, -2.2], [0, -1.8]], bx, by - 2.6, [1, 1], "S", true);
-      doc.line(bx - 1, by, bx - 0.2, by + 0.9);
-      doc.line(bx - 0.2, by + 0.9, bx + 1.2, by - 0.8);
-    } else if (icon === "wrench") {
-      doc.setLineWidth(0.9);
-      doc.line(bx - 2, by + 2, bx + 1.2, by - 1.2);
-      doc.setLineWidth(0.5);
-      doc.circle(bx + 1.8, by - 1.8, 1.1, "S");
-    } else if (icon === "truck") {
-      doc.rect(bx - 2.8, by - 1.6, 3.4, 2.6, "F");
-      doc.rect(bx + 0.8, by - 0.6, 1.9, 1.6, "F");
-      doc.setFillColor(...RED);
-      doc.setFillColor(...WHITE);
-      doc.circle(bx - 1.8, by + 1.6, 0.7, "F");
-      doc.circle(bx + 1.7, by + 1.6, 0.7, "F");
-    } else {
-      const pts: number[][] = [];
-      for (let k = 0; k < 10; k++) {
-        const r = k % 2 === 0 ? 2.8 : 1.2;
-        const a = -Math.PI / 2 + (k * Math.PI) / 5;
-        pts.push([bx + r * Math.cos(a), by + r * Math.sin(a)]);
-      }
-      const rel = pts.slice(1).map((p, k) => [p[0]! - pts[k]![0]!, p[1]! - pts[k]![1]!]);
-      doc.lines(rel, pts[0]![0]!, pts[0]![1]!, [1, 1], "F", true);
-    }
-    doc.setFont("times", "bold");
-    doc.setFontSize(7.5);
-    doc.setTextColor(...NAVY);
-    doc.text(top, bx + 7, by - 0.6);
-    doc.setTextColor(...RED);
-    doc.setFontSize(6.8);
-    doc.text(bottom, bx + 7, by + 3);
+    doc.circle(M + PAD + 0.8, ny - 0.95, 0.65, "F");
+    doc.text(note, M + PAD + 3.6, ny);
+  });
+  doc.setDrawColor(...LINE);
+  doc.setLineWidth(0.3);
+  doc.line(dividerX, notesTop + 5, dividerX, notesTop + NOTES_H - 5);
+  const prepX = dividerX + PAD;
+  font("bold", 7, RED);
+  spaced("PREPARED BY", prepX, notesTop + 5 + 2.8, 0.6);
+  font("bold", 12, NAVY);
+  spaced(store.toUpperCase(), prepX, notesTop + 5 + 9.6, 1);
+  font("normal", 7, MUTED);
+  doc.text(formatDate(data.issued_at), prepX, notesTop + 5 + 14);
+  doc.text(["Computer-generated invoice;", "no signature required."], prepX, notesTop + NOTES_H - 5 - 3.6, {
+    lineHeightFactor: 1.4,
+  });
+
+  // ---------- Footer on every page: slogan + four promises ----------
+  for (let page = 1; page <= doc.getNumberOfPages(); page++) {
+  doc.setPage(page);
+  const fy = H - FOOTER_H;
+  panel(M, fy, CW, 10);
+  serif(9, NAVY);
+  spaced("QUALITY APPLIANCES   •   RELIABLE PERFORMANCE   •   FOR YOUR HOME", W / 2, mid(fy, 10, 9), 0.6, "center");
+
+  const badges: [InvoiceIcon, string, string][] = [
+    ["circle_shieldCheck", "MANUFACTURER", "WARRANTY"],
+    ["circle_wrench", "AFTER-SALES", "SERVICE"],
+    ["circle_truck", "FAST", "DELIVERY"],
+    ["circle_star", "QUALITY", "YOU CAN TRUST"],
+  ];
+  const colW = CW / 4;
+  const badgeTop = fy + 14;
+  const BADGE = 9;
+  badges.forEach(([key, top, bottom], i) => {
+    const bx = M + i * colW + 5;
+    icon(key, bx, badgeTop, BADGE);
+    serif(7.8, NAVY);
+    doc.text(top, bx + BADGE + 3, badgeTop + BADGE / 2 - 0.6);
+    serif(7, RED);
+    doc.text(bottom, bx + BADGE + 3, badgeTop + BADGE / 2 + 3.2);
     if (i > 0) {
       doc.setDrawColor(...LINE);
       doc.setLineWidth(0.4);
-      doc.line(M + i * colW - 1, fy + 15, M + i * colW - 1, fy + 27);
+      doc.line(M + i * colW, badgeTop - 1, M + i * colW, badgeTop + BADGE + 1);
     }
   });
+  }
 
   return doc;
 }
