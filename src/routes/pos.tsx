@@ -11,6 +11,7 @@ import {
   Plus,
   Search,
   Trash2,
+  UserPlus,
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -30,6 +31,7 @@ import {
   calculateTotals,
   channelOf,
   createOrder,
+  createOrLinkCustomer,
   fetchCustomers,
   fetchProducts,
   type Customer,
@@ -638,6 +640,32 @@ function CustomerDialog({
 
   const isWalkIn = draft.customerId === "walkin";
 
+  // A full phone number (10 digits, optionally with 91) that no customer has
+  const queryDigits = digitsOf(query);
+  const phoneKey = queryDigits.slice(-10);
+  const looksLikePhone = /^[\d\s+()-]+$/.test(query.trim()) && (queryDigits.length === 10 || (queryDigits.length === 12 && queryDigits.startsWith("91")));
+  const newPhone =
+    looksLikePhone && !customers.some((c) => digitsOf(c.phone).slice(-10) === phoneKey) ? phoneKey : "";
+
+  const [newName, setNewName] = useState("");
+  useEffect(() => setNewName(""), [newPhone]);
+
+  const queryClient = useQueryClient();
+  const createCustomer = useMutation({
+    mutationFn: async () => {
+      const id = await createOrLinkCustomer({ name: newName.trim(), phone: newPhone });
+      if (!id) throw new Error("Could not create the customer");
+      return id;
+    },
+    onSuccess: (id) => {
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      updateDraft({ customerId: id, customerName: newName.trim(), customerPhone: newPhone });
+      toast.success(`Customer ${newName.trim()} created and selected`);
+      setQuery("");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
@@ -681,12 +709,44 @@ function CustomerDialog({
                   onSelect={() => choose(c)}
                 />
               ))}
-              {query.trim() && !matches.length && (
+              {query.trim() && !matches.length && !newPhone && (
                 <p className="px-3 py-2 text-sm text-muted-foreground">
-                  No customer found. Keep Walk-in and enter their name and phone below to save them.
+                  {queryDigits.length >= 3
+                    ? "No customer with this number. Enter the full 10-digit phone number to create one."
+                    : "No customer found. Search by phone number to create a new customer."}
                 </p>
               )}
             </div>
+
+            {/* Phone number not on file: offer to create the customer right here */}
+            {newPhone && (
+              <div className="mt-2 rounded-md border border-primary/40 bg-primary/5 p-3">
+                <p className="text-sm font-semibold">
+                  No customer with <span className="font-mono">{newPhone}</span>. Create a new customer?
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Input
+                    className="min-w-0 flex-1 basis-40"
+                    placeholder="Customer name"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && newName.trim()) {
+                        e.preventDefault();
+                        createCustomer.mutate();
+                      }
+                    }}
+                  />
+                  <Button
+                    className="gap-1.5"
+                    disabled={!newName.trim() || createCustomer.isPending}
+                    onClick={() => createCustomer.mutate()}
+                  >
+                    <UserPlus className="size-4" /> {createCustomer.isPending ? "Creating…" : "Create customer"}
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
 
           {isWalkIn && (
