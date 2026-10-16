@@ -1,6 +1,5 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
-  Bell,
   Boxes,
   ChevronLeft,
   FileBarChart,
@@ -33,7 +32,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { ROLE_LABELS, useRole, type Role } from "@/components/role-provider";
-import { useNotifications } from "@/hooks/use-notifications";
+import { NotificationBell } from "@/components/notifications";
 import { logout } from "@/lib/auth";
 import { GlobalBarcodeScanner } from "@/components/global-barcode-scanner";
 
@@ -70,7 +69,6 @@ export function AppShell({
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const navigate = useNavigate();
   const { role, user, setUser } = useRole();
-  const notifications = useNotifications();
 
   const logoutMutation = useMutation({
     mutationFn: logout,
@@ -247,31 +245,7 @@ export function AppShell({
               </div>
             )}
             <div className="flex shrink-0 items-center gap-2">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon" className="relative">
-                    <Bell className="size-4" />
-                    {notifications.length > 0 && (
-                      <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground">
-                        {notifications.length}
-                      </span>
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-[min(20rem,calc(100vw-2rem))]">
-                  <DropdownMenuLabel>Notifications</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {notifications.length === 0 && (
-                    <p className="px-2 py-4 text-sm text-muted-foreground">You're all caught up.</p>
-                  )}
-                  {notifications.map((n) => (
-                    <DropdownMenuItem key={n.id} className="flex flex-col items-start gap-0.5">
-                      <span className="text-sm font-medium">{n.title}</span>
-                      <span className="text-xs text-muted-foreground">{n.description}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <NotificationBell />
             </div>
           </div>
         </header>

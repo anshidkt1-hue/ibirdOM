@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -67,7 +67,12 @@ import {
 import { formatCurrency, formatDateTime, formatNumber } from "@/lib/format";
 import { useRole } from "@/components/role-provider";
 
+const INVENTORY_TABS = ["online", "counter", "categories", "alerts", "history"];
+
 export const Route = createFileRoute("/inventory")({
+  // ?tab=alerts opens a tab directly (used by stock notifications)
+  validateSearch: (search: Record<string, unknown>): { tab?: string } =>
+    typeof search["tab"] === "string" && INVENTORY_TABS.includes(search["tab"]) ? { tab: search["tab"] } : {},
   head: () => ({
     meta: [
       { title: "Inventory — ibird Stock Tracking & Alerts" },
@@ -130,7 +135,11 @@ function InventoryPage() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [status, setStatus] = useState<"active" | "inactive" | "all">("active");
-  const [tab, setTab] = useState<string>("online");
+  const { tab: tabFromUrl } = Route.useSearch();
+  const [tab, setTab] = useState<string>(tabFromUrl ?? "online");
+  useEffect(() => {
+    if (tabFromUrl) setTab(tabFromUrl);
+  }, [tabFromUrl]);
   const tabChannel: SalesChannel = tab === "counter" ? "counter" : "online";
   const [target, setTarget] = useState<Product | null>(null);
   const [qty, setQty] = useState(0);
