@@ -5,13 +5,14 @@ import { formatCurrency } from "@/lib/format";
 
 const db = supabase as unknown as { from: (table: string) => any };
 
-export type NotificationCategory = "assignments" | "orders" | "payments" | "stock" | "documents" | "catalog";
+export type NotificationCategory = "enquiries" | "assignments" | "orders" | "payments" | "stock" | "documents" | "catalog";
 export type NotificationSeverity = "critical" | "warning" | "info";
 
 export type NotificationLink =
   | { to: "/orders/$orderId"; params: { orderId: string } }
   | { to: "/inventory"; search: { tab: string } }
   | { to: "/orders"; search: { assignedTo: string } }
+  | { to: "/inbox"; search: { phone: string } }
   | { to: "/orders" | "/invoices" | "/coupons" };
 
 export type AppNotification = {
@@ -26,6 +27,7 @@ export type AppNotification = {
 };
 
 export const CATEGORY_LABEL: Record<NotificationCategory, string> = {
+  enquiries: "WhatsApp enquiries",
   assignments: "Assignments",
   orders: "Orders",
   payments: "Payments",
@@ -49,7 +51,7 @@ export async function fetchNotifications(viewer: NotificationViewer = { userId: 
   // Staff only hear about orders assigned to them
   const mine = (q: any) => (isStaff && viewer.userId ? q.eq("assigned_to", viewer.userId) : q);
 
-  const [toPack, awaiting, paidRecent, products, unsent, assignments] = await Promise.all([
+  const [toPack, awaiting, paidRecent, products, unsent, assignments, waiting] = await Promise.all([
     // Paid WhatsApp orders that nobody has started processing
     mine(
       db
@@ -108,9 +110,45 @@ export async function fetchNotifications(viewer: NotificationViewer = { userId: 
           .order("assigned_at", { ascending: false })
           .limit(300)
       : Promise.resolve({ data: [] }),
+    // Customers waiting for a reply from the team in the WhatsApp inbox
+    db
+      .from("whatsapp_sessions")
+      .select("phone_number, profile_name, form_data, last_inbound_at")
+      .eq("needs_reply", true)
+      .order("last_inbound_at", { ascending: false })
+      .limit(30),
   ]);
 
-  const out: AppNotification[] = [];
+  const enquiries: AppNotification[] = [];
+  const waitingRows = (waiting.data ?? []) as any[];
+  if (waitingRows.length) {
+    const { data: lastMsgs } = await db
+      .from("whatsapp_messages")
+      .select("phone_number, body, created_at")
+      .in("phone_number", waitingRows.map((w) => w.phone_number))
+      .eq("message_type", "inbound")
+      .not("body", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(200);
+    const lastBody = new Map<string, string>();
+    for (const m of (lastMsgs ?? []) as any[]) if (!lastBody.has(m.phone_number)) lastBody.set(m.phone_number, m.body);
+    for (const w of waitingRows) {
+      const who = w.form_data?.name || w.profile_name || `+${w.phone_number}`;
+      const said = lastBody.get(w.phone_number) ?? "";
+      enquiries.push({
+        // a new message from the same customer shows as unread again
+        id: `enquiry-${w.phone_number}-${w.last_inbound_at}`,
+        category: "enquiries",
+        severity: "critical",
+        title: `${who} is waiting for a reply`,
+        description: said ? `"${said.length > 90 ? `${said.slice(0, 90)}…` : said}"` : "Open the WhatsApp inbox to reply",
+        at: w.last_inbound_at,
+        link: { to: "/inbox", search: { phone: w.phone_number } },
+      });
+    }
+  }
+
+  const out: AppNotification[] = [...enquiries];
   const product = (p: any) => `${p.name}${p.variant ? ` ${p.variant}` : ""}`;
 
   for (const o of (toPack.data ?? []) as any[]) {

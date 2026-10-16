@@ -7,6 +7,7 @@ import {
   FileWarning,
   ImageOff,
   PackageX,
+  MessageCircle,
   Receipt,
   UserCheck,
   type LucideIcon,
@@ -22,6 +23,7 @@ import { CATEGORY_LABEL, timeAgo, type NotificationCategory, type NotificationSe
 import { cn } from "@/lib/utils";
 
 export const CATEGORY_ICON: Record<NotificationCategory, LucideIcon> = {
+  enquiries: MessageCircle,
   assignments: UserCheck,
   orders: Receipt,
   payments: CreditCard,

@@ -1,8 +1,10 @@
 import { supabase } from '../server';
 import { sendButtons, sendProductCard, sendProductList, sendTextMessage, STORE_NAME } from './whatsappService';
 import { createWhatsAppOrder, CartItem } from './orderService';
+import { answer, classify, handoff, isBotPaused, resumeBot, sendFaqMenu } from './enquiryService';
 
-const RESET_WORDS = ['hi', 'hello', 'hey', 'menu', 'start', 'restart', 'cancel', 'order'];
+// The welcome is not sent again if a greeting arrives within this window
+const WELCOME_COOLDOWN_MS = 3 * 60_000;
 
 async function updateSession(phoneNumber: string, patch: Record<string, any>) {
   const { error } = await supabase
@@ -42,11 +44,15 @@ function cartSummary(cart: CartItem[]) {
 
 // The name and address in form_data are kept between orders, so returning customers only confirm them
 export async function sendWelcome(phoneNumber: string) {
-  await updateSession(phoneNumber, { session_state: 'welcome', cart_items: [] });
+  await updateSession(phoneNumber, { session_state: 'welcome', cart_items: [], last_welcome_at: new Date() });
   await sendButtons(
     phoneNumber,
-    `👋 Welcome to *${STORE_NAME}*!\n\nBrowse our products and place your order right here on WhatsApp.`,
-    [{ id: 'start_order', title: '🛒 Start Order' }]
+    `👋 Welcome to *${STORE_NAME}*!\n\nOrder right here on WhatsApp, ask us anything, or talk to our team.`,
+    [
+      { id: 'start_order', title: '🛒 Start order' },
+      { id: 'ask_question', title: '💬 Ask a question' },
+      { id: 'talk_to_us', title: '📞 Talk to us' },
+    ]
   );
 }
 
@@ -131,26 +137,44 @@ export async function processCustomerMessage(phoneNumber: string, messageText: s
   const raw = messageText.trim();
   const text = raw.toLowerCase();
   const state = session?.session_state || 'welcome';
+  const intent = classify(raw);
 
-  console.log(`📨 Processing message from ${phoneNumber}: "${raw}" (state: ${state})`);
-
-  if (RESET_WORDS.includes(text) || state === 'welcome' || state === 'completed') {
-    return sendWelcome(phoneNumber);
-  }
+  console.log(`📨 Processing message from ${phoneNumber}: "${raw}" (state: ${state}, intent: ${intent ?? 'none'})`);
 
   if (state === 'processing') return;
 
+  // Answers the bot asked for are never treated as questions
   if (state === 'ask_name') {
     const form = { ...(session.form_data || {}), name: raw.slice(0, 80), address: undefined };
     await updateSession(phoneNumber, { form_data: form, session_state: 'ask_address' });
     return sendTextMessage(phoneNumber, `Thanks ${form.name}! 🏠 Please send your *delivery address*.`);
   }
-
   if (state === 'ask_address') {
     const form = { ...(session.form_data || {}), address: raw.slice(0, 300) };
     await updateSession(phoneNumber, { form_data: form });
     // Details complete: create the order and send the payment link
     return placeOrder(phoneNumber);
+  }
+
+  // "menu" / "order" always brings the bot back, even while staff are handling the chat
+  if (intent === 'menu') {
+    if (isBotPaused(session)) await resumeBot(phoneNumber);
+    return sendWelcome(phoneNumber);
+  }
+
+  // Staff are handling this chat: the bot stays quiet (the message waits in the dashboard inbox)
+  if (isBotPaused(session)) return;
+
+  // The customer chose "Something else": whatever they write goes to the team
+  if (state === 'asking') return handoff(phoneNumber, session);
+
+  if (intent === 'ack') return; // "ok", "thanks", 👍: no reply needed
+
+  if (intent === 'greeting') {
+    const recent =
+      session?.last_welcome_at && Date.now() - new Date(session.last_welcome_at).getTime() < WELCOME_COOLDOWN_MS;
+    if (recent) return;
+    return sendWelcome(phoneNumber);
   }
 
   if (state === 'confirm_details') {
@@ -160,13 +184,10 @@ export async function processCustomerMessage(phoneNumber: string, messageText: s
     ]);
   }
 
-  if (state === 'catalog') {
-    if (text.includes('checkout') || text.includes('pay')) return beginCheckout(phoneNumber);
-    return sendButtons(phoneNumber, 'Choose a product from the list, or:', [
-      { id: 'view_products', title: '🛍️ View products' },
-      { id: 'checkout', title: '✅ Checkout' },
-    ]);
-  }
+  if (state === 'catalog' && (text.includes('checkout') || /^pay\b/.test(text))) return beginCheckout(phoneNumber);
+
+  // Questions the bot can answer by itself
+  if (intent && (await answer(phoneNumber, intent, session))) return;
 
   if (state === 'payment') {
     const { data: wa } = await supabase
@@ -176,20 +197,36 @@ export async function processCustomerMessage(phoneNumber: string, messageText: s
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-
     if (wa?.payment_status === 'pending' && wa.payment_link) {
       return sendTextMessage(phoneNumber, `💳 Your payment is still pending:\n${wa.payment_link}\n\nSend *menu* to start a new order.`);
     }
-    return sendWelcome(phoneNumber);
   }
 
-  return sendWelcome(phoneNumber);
+  // Anything else is an enquiry for a person
+  return handoff(phoneNumber, session);
+}
+
+// Photos, voice notes, documents and locations are for the team; stickers and reactions need no reply
+export async function processMediaMessage(phoneNumber: string, kind: string, session: any) {
+  if (kind === 'sticker' || kind === 'reaction' || kind === 'unsupported') return;
+  if (session?.session_state === 'processing') return;
+  if (isBotPaused(session)) return;
+  return handoff(phoneNumber, session);
 }
 
 export async function processButtonReply(phoneNumber: string, buttonId: string) {
   console.log(`🔘 Button clicked - ${phoneNumber}: ${buttonId}`);
 
-  if (buttonId === 'start_order') return startOrder(phoneNumber);
+  if (buttonId === 'start_order') {
+    // Choosing to order brings the bot back if staff had taken over
+    const session = await getSession(phoneNumber);
+    if (isBotPaused(session)) await resumeBot(phoneNumber);
+    return startOrder(phoneNumber);
+  }
+
+  if (buttonId === 'ask_question') return sendFaqMenu(phoneNumber);
+
+  if (buttonId === 'talk_to_us') return handoff(phoneNumber, await getSession(phoneNumber), { explicit: true });
 
   if (buttonId.startsWith('add:')) return addToCart(phoneNumber, buttonId.slice(4));
 
@@ -219,6 +256,11 @@ export async function processButtonReply(phoneNumber: string, buttonId: string) 
 
 // Tapping a product in the list shows its photo card; adding happens from the card's button.
 export async function processListSelection(phoneNumber: string, productId: string) {
+  // Topics from the "Ask a question" menu
+  if (productId.startsWith('faq:')) {
+    const topic = productId.slice(4) as 'price' | 'delivery' | 'store' | 'status' | 'other';
+    return answer(phoneNumber, topic, await getSession(phoneNumber));
+  }
   console.log(`👀 Product opened - ${phoneNumber}: ${productId}`);
   return sendProductCard(phoneNumber, productId);
 }

@@ -9,16 +9,55 @@ const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const RETRY_DELAYS_MS = [500, 1500, 4000];
 
 // Burst traffic can trigger 429/5xx from the WhatsApp API; retry those, never 4xx client errors.
-async function postWithRetry(url: string, payload: unknown) {
+// Who sent an outbound message: the bot (default) or a staff member replying from the inbox
+export type SentBy = { id: string; name: string } | null;
+
+// A readable line for the inbox, whatever kind of message was sent
+function summarize(payload: any): { body: string; kind: string } {
+  const type = payload?.type ?? 'message';
+  if (type === 'text') return { body: payload.text?.body ?? '', kind: 'text' };
+  if (type === 'interactive') {
+    const i = payload.interactive ?? {};
+    if (i.type === 'product_list') return { body: `🛍️ Product catalogue: ${i.body?.text ?? ''}`, kind: 'catalog' };
+    const buttons = (i.action?.buttons ?? []).map((b: any) => `[${b.reply?.title}]`).join(' ');
+    const list = i.action?.button ? `[${i.action.button}]` : '';
+    return { body: [i.body?.text, buttons || list].filter(Boolean).join('\n'), kind: i.type ?? 'interactive' };
+  }
+  if (type === 'document') return { body: `📄 ${payload.document?.filename ?? 'Document'}${payload.document?.caption ? ` · ${payload.document.caption}` : ''}`, kind: 'document' };
+  if (type === 'image') return { body: `🖼️ ${payload.image?.caption ?? 'Image'}`, kind: 'image' };
+  if (type === 'template') return { body: `Template: ${payload.template?.name ?? ''}`, kind: 'template' };
+  return { body: `[${type}]`, kind: type };
+}
+
+async function logOutbound(payload: any, sentBy: SentBy, waMessageId?: string) {
+  const { body, kind } = summarize(payload);
+  const { error } = await supabase.from('whatsapp_messages').insert({
+    phone_number: payload?.to,
+    message_type: 'outbound',
+    body,
+    kind,
+    status: 'sent',
+    template_name: payload?.type === 'template' ? payload.template?.name : null,
+    wa_message_id: waMessageId ?? null,
+    sent_by: sentBy?.id ?? null,
+    sent_by_name: sentBy?.name ?? null,
+  });
+  if (error) console.error('❌ Outbound log failed:', error.message);
+}
+
+async function postWithRetry(url: string, payload: unknown, sentBy: SentBy = null) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await axios.post(url, payload, {
+      const response = await axios.post(url, payload, {
         headers: {
           'Authorization': `Bearer ${ACCESS_TOKEN}`,
           'Content-Type': 'application/json',
         },
         timeout: 15000,
       });
+      // Every message the customer receives is kept for the inbox (never blocks sending)
+      void logOutbound(payload, sentBy, response.data?.messages?.[0]?.id);
+      return response;
     } catch (error: any) {
       const status = error.response?.status;
       const retryable = !status || status === 429 || status >= 500;
@@ -58,14 +97,6 @@ export async function sendWhatsAppMessage(
 
     console.log(`✅ Message sent to ${phoneNumber}`);
 
-    // Log message
-    await supabase.from('whatsapp_messages').insert({
-      phone_number: phoneNumber,
-      message_type: 'outbound',
-      template_name: templateName,
-      status: 'sent',
-    });
-
     return response.data;
   } catch (error: any) {
     console.error(`❌ Failed to send message:`, error.response?.data);
@@ -73,7 +104,7 @@ export async function sendWhatsAppMessage(
   }
 }
 
-export async function sendTextMessage(phoneNumber: string, text: string) {
+export async function sendTextMessage(phoneNumber: string, text: string, sentBy: SentBy = null) {
   try {
     const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`;
 
@@ -88,7 +119,7 @@ export async function sendTextMessage(phoneNumber: string, text: string) {
       },
     };
 
-    const response = await postWithRetry(url, payload);
+    const response = await postWithRetry(url, payload, sentBy);
 
     console.log(`✅ Text message sent to ${phoneNumber}`);
 
@@ -100,6 +131,40 @@ export async function sendTextMessage(phoneNumber: string, text: string) {
 }
 
 export const STORE_NAME = process.env.STORE_NAME || 'ibird';
+
+// A tappable menu of up to 10 rows (WhatsApp limits: title 24, description 72 characters)
+export async function sendList(
+  phoneNumber: string,
+  bodyText: string,
+  buttonLabel: string,
+  rows: { id: string; title: string; description?: string }[]
+) {
+  const url = `${WHATSAPP_API_URL}/${PHONE_NUMBER_ID}/messages`;
+  await postWithRetry(url, {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: phoneNumber,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: bodyText.slice(0, 1024) },
+      footer: { text: STORE_NAME },
+      action: {
+        button: buttonLabel.slice(0, 20),
+        sections: [
+          {
+            title: 'Topics',
+            rows: rows.slice(0, 10).map((r) => ({
+              id: r.id,
+              title: r.title.slice(0, 24),
+              ...(r.description ? { description: r.description.slice(0, 72) } : {}),
+            })),
+          },
+        ],
+      },
+    },
+  });
+}
 
 // Media by public link: a PDF document (shown with its file name) or an image with a caption
 export async function sendDocument(phoneNumber: string, link: string, filename: string, caption?: string) {

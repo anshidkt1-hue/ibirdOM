@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as CouponsRouteImport } from './routes/coupons'
 import { Route as CustomersRouteImport } from './routes/customers'
 import { Route as EmployeesRouteImport } from './routes/employees'
+import { Route as InboxRouteImport } from './routes/inbox'
 import { Route as InventoryRouteImport } from './routes/inventory'
 import { Route as InvoicesRouteImport } from './routes/invoices'
 import { Route as LoginRouteImport } from './routes/login'
@@ -43,6 +44,11 @@ const CustomersRoute = CustomersRouteImport.update({
 const EmployeesRoute = EmployeesRouteImport.update({
   id: '/employees',
   path: '/employees',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InboxRoute = InboxRouteImport.update({
+  id: '/inbox',
+  path: '/inbox',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InventoryRoute = InventoryRouteImport.update({
@@ -106,6 +112,7 @@ export interface FileRoutesByFullPath {
   '/coupons': typeof CouponsRoute
   '/customers': typeof CustomersRouteWithChildren
   '/employees': typeof EmployeesRouteWithChildren
+  '/inbox': typeof InboxRoute
   '/inventory': typeof InventoryRoute
   '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
@@ -123,6 +130,7 @@ export interface FileRoutesByTo {
   '/coupons': typeof CouponsRoute
   '/customers': typeof CustomersRouteWithChildren
   '/employees': typeof EmployeesRouteWithChildren
+  '/inbox': typeof InboxRoute
   '/inventory': typeof InventoryRoute
   '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
@@ -141,6 +149,7 @@ export interface FileRoutesById {
   '/coupons': typeof CouponsRoute
   '/customers': typeof CustomersRouteWithChildren
   '/employees': typeof EmployeesRouteWithChildren
+  '/inbox': typeof InboxRoute
   '/inventory': typeof InventoryRoute
   '/invoices': typeof InvoicesRoute
   '/login': typeof LoginRoute
@@ -160,6 +169,7 @@ export interface FileRouteTypes {
     | '/coupons'
     | '/customers'
     | '/employees'
+    | '/inbox'
     | '/inventory'
     | '/invoices'
     | '/login'
@@ -177,6 +187,7 @@ export interface FileRouteTypes {
     | '/coupons'
     | '/customers'
     | '/employees'
+    | '/inbox'
     | '/inventory'
     | '/invoices'
     | '/login'
@@ -194,6 +205,7 @@ export interface FileRouteTypes {
     | '/coupons'
     | '/customers'
     | '/employees'
+    | '/inbox'
     | '/inventory'
     | '/invoices'
     | '/login'
@@ -212,6 +224,7 @@ export interface RootRouteChildren {
   CouponsRoute: typeof CouponsRoute
   CustomersRoute: typeof CustomersRouteWithChildren
   EmployeesRoute: typeof EmployeesRouteWithChildren
+  InboxRoute: typeof InboxRoute
   InventoryRoute: typeof InventoryRoute
   InvoicesRoute: typeof InvoicesRoute
   LoginRoute: typeof LoginRoute
@@ -251,6 +264,13 @@ declare module '@tanstack/react-router' {
       path: '/employees'
       fullPath: '/employees'
       preLoaderRoute: typeof EmployeesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/inbox': {
+      id: '/inbox'
+      path: '/inbox'
+      fullPath: '/inbox'
+      preLoaderRoute: typeof InboxRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/inventory': {
@@ -362,6 +382,7 @@ const rootRouteChildren: RootRouteChildren = {
   CouponsRoute: CouponsRoute,
   CustomersRoute: CustomersRouteWithChildren,
   EmployeesRoute: EmployeesRouteWithChildren,
+  InboxRoute: InboxRoute,
   InventoryRoute: InventoryRoute,
   InvoicesRoute: InvoicesRoute,
   LoginRoute: LoginRoute,

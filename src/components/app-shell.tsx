@@ -6,6 +6,7 @@ import {
   FileText,
   LayoutGrid,
   LogOut,
+  MessageCircle,
   Menu,
   Moon,
   Package,
@@ -18,7 +19,8 @@ import {
   UserSquare2,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { fetchNeedsReplyCount } from "@/lib/inbox";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +42,7 @@ const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutGrid },
   { to: "/pos", label: "Counter Sale", icon: ShoppingCart },
   { to: "/orders", label: "Orders", icon: Receipt },
+  { to: "/inbox", label: "WhatsApp Inbox", icon: MessageCircle },
   { to: "/invoices", label: "Invoices", icon: FileText },
   { to: "/coupons", label: "Coupons", icon: Ticket },
   { to: "/customers", label: "Customers", icon: Users },
@@ -69,6 +72,11 @@ export function AppShell({
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const navigate = useNavigate();
   const { role, user, setUser } = useRole();
+  const { data: waitingChats = 0 } = useQuery({
+    queryKey: ["inbox", "needs-reply-count"],
+    queryFn: fetchNeedsReplyCount,
+    refetchInterval: 30_000,
+  });
 
   const logoutMutation = useMutation({
     mutationFn: logout,
@@ -139,7 +147,12 @@ export function AppShell({
                 )}
               >
                 <item.icon className="size-[18px]" />
-                {item.label}
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                {item.to === "/inbox" && waitingChats > 0 && (
+                  <span className="rounded-full bg-destructive px-1.5 text-[11px] font-bold text-destructive-foreground">
+                    {waitingChats}
+                  </span>
+                )}
               </Link>
             );
           })}

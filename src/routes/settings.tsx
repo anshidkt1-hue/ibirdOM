@@ -17,6 +17,7 @@ import { fetchSettings, saveSettings } from "@/lib/data";
 import { useRole } from "@/components/role-provider";
 import { StatusBadge } from "@/components/status-badge";
 import { WhatsAppLinkBuilder } from "@/components/whatsapp-link-builder";
+import { WhatsAppRepliesEditor } from "@/components/whatsapp-replies-editor";
 
 // Role permissions definition - outside component for better performance
 const ROLE_PERMISSIONS: Record<string, { desc: string; access: string[]; restrictions: string[] }> = {
@@ -110,7 +111,12 @@ function SettingsPage() {
             <TabsTrigger value="advanced">Advanced</TabsTrigger>
             <TabsTrigger value="access">Access Control</TabsTrigger>
             <TabsTrigger value="whatsapp">WhatsApp link</TabsTrigger>
+            <TabsTrigger value="whatsapp-replies">WhatsApp replies</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="whatsapp-replies" className="p-6">
+            <WhatsAppRepliesEditor />
+          </TabsContent>
 
           <TabsContent value="whatsapp" className="p-6">
             <WhatsAppLinkBuilder />

@@ -5,6 +5,7 @@ import {
   handleMessageStatus,
 } from '../controllers/whatsappController';
 import { syncCatalog } from '../services/catalogService';
+import { sendInboxReply } from '../controllers/inboxController';
 
 const router = Router();
 
@@ -25,5 +26,8 @@ router.post('/catalog/sync', async (_req: Request, res: Response) => {
     res.status(502).json({ error: error.response?.data?.error?.message || error.message });
   }
 });
+
+// Staff reply from the dashboard WhatsApp inbox
+router.post('/inbox/send', sendInboxReply);
 
 export default router;
