@@ -353,10 +353,11 @@ export async function downloadCouponsPdf(arts: CouponArtInput[], orderNumber: st
 
 // Opens the coupons PDF in a new tab, where it can be printed for the customer
 export async function openCouponsPdf(arts: CouponArtInput[], orderNumber: string) {
+  // The tab is opened during the click (before the PDF is built) so it is not treated as a pop-up
   const tab = window.open("", "_blank");
-  const url = URL.createObjectURL((await couponsDoc(arts, orderNumber)).output("blob"));
-  if (tab) tab.location.href = url;
-  else window.location.assign(url);
+  const doc = await couponsDoc(arts, orderNumber);
+  if (tab) tab.location.href = URL.createObjectURL(doc.output("blob"));
+  else doc.save(couponsFileName(orderNumber)); // pop-ups blocked: download instead of leaving the page
 }
 
 // Coupons for the offer products of a counter sale (one per unit), issued once by the database

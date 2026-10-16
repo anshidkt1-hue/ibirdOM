@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, ExternalLink, Loader2, Printer, Ticket } from "lucide-react";
+import { Download, ExternalLink, Loader2, Maximize2, Minimize2, Printer, Ticket } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -27,6 +27,8 @@ export function InvoiceViewer({
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Full screen works everywhere, including browsers or app frames that block new tabs
+  const [full, setFull] = useState(false);
 
   useEffect(() => {
     if (!invoice) return;
@@ -48,8 +50,22 @@ export function InvoiceViewer({
   }, [invoice]);
 
   return (
-    <Dialog open={!!invoice} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex h-[92vh] max-w-[min(56rem,calc(100vw-1rem))] flex-col gap-3 p-3 sm:p-5">
+    <Dialog
+      open={!!invoice}
+      onOpenChange={(open) => {
+        if (!open) {
+          setFull(false);
+          onClose();
+        }
+      }}
+    >
+      <DialogContent
+        className={
+          full
+            ? "flex h-[100dvh] w-screen max-w-none flex-col gap-3 rounded-none p-3 sm:p-4"
+            : "flex h-[92vh] max-w-[min(56rem,calc(100vw-1rem))] flex-col gap-3 p-3 sm:p-5"
+        }
+      >
         <DialogHeader>
           <DialogTitle className="font-mono text-base">Invoice {invoice?.invoice_number}</DialogTitle>
         </DialogHeader>
@@ -96,9 +112,22 @@ export function InvoiceViewer({
           </div>
         )}
         <DialogFooter className="flex-row flex-wrap justify-end gap-2">
-          <Button variant="outline" className="gap-2" disabled={!url} onClick={() => url && window.open(url, "_blank")}>
-            <ExternalLink className="size-4" /> Open in new tab
+          <Button variant="outline" className="gap-2" disabled={!url} onClick={() => setFull((f) => !f)}>
+            {full ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+            {full ? "Exit full screen" : "Full screen"}
           </Button>
+          {/* A real link: browsers block window.open() of a PDF blob as a pop-up, but always allow a clicked link */}
+          {url ? (
+            <Button asChild variant="outline" className="gap-2">
+              <a href={url} target="_blank" rel="noopener">
+                <ExternalLink className="size-4" /> Open in new tab
+              </a>
+            </Button>
+          ) : (
+            <Button variant="outline" className="gap-2" disabled>
+              <ExternalLink className="size-4" /> Open in new tab
+            </Button>
+          )}
           <Button
             className="gap-2"
             disabled={!invoice}
